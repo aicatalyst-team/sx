@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -728,6 +729,14 @@ func processInstallationResults(allResults map[string]clients.InstallResponse, s
 	}
 
 	successfullyInstalled := make(map[string]bool)
+	// Aggregate unsupported-event hook skips per client so we can emit one
+	// summary line ("Gemini: skipped 3 hooks (events not supported: ...)")
+	// instead of one ⊘ line per (asset, client) pair.
+	type unsupportedSkip struct{ asset, event string }
+	unsupportedByClient := make(map[string][]unsupportedSkip)
+	// In strict mode, escalated unsupported-event skips don't show up in
+	// allResults' Status fields (only in the local `status` rebind), so
+	// HasAnyErrors won't detect them. This flag bridges that gap.
 	strictSawUnsupported := false
 
 	for clientID, resp := range allResults {
@@ -765,11 +774,53 @@ func processInstallationResults(allResults map[string]clients.InstallResponse, s
 					installResult.Errors = append(installResult.Errors, result.Error)
 				}
 			case clients.StatusSkipped:
+				// Aggregate unsupported-event skips into a per-client summary
+				// (rendered after the loop). All other skip reasons keep
+				// their per-asset ⊘ line.
+				var details *hook.UnsupportedEventDetails
+				if errors.As(result.Error, &details) {
+					unsupportedByClient[clientID] = append(unsupportedByClient[clientID], unsupportedSkip{
+						asset: result.AssetName,
+						event: details.Event,
+					})
+					continue
+				}
 				if result.AssetName != "" && result.Message != "" {
 					styledOut.ListItem("⊘", result.AssetName+" → "+client.DisplayName()+": "+result.Message)
 				}
 			}
 		}
+	}
+
+	// Emit one aggregate summary per client that had unsupported-event skips.
+	// Sorted client IDs for deterministic output.
+	skippedClients := make([]string, 0, len(unsupportedByClient))
+	for id := range unsupportedByClient {
+		skippedClients = append(skippedClients, id)
+	}
+	sort.Strings(skippedClients)
+	for _, clientID := range skippedClients {
+		client, _ := clients.Global().Get(clientID)
+		skips := unsupportedByClient[clientID]
+		// De-dup events while preserving first-seen order.
+		seen := make(map[string]struct{}, len(skips))
+		uniqueEvents := make([]string, 0, len(skips))
+		for _, s := range skips {
+			if _, ok := seen[s.event]; ok {
+				continue
+			}
+			seen[s.event] = struct{}{}
+			uniqueEvents = append(uniqueEvents, s.event)
+		}
+		var label string
+		if len(skips) == 1 {
+			label = fmt.Sprintf("%s: skipped 1 hook (event not supported: %s)",
+				client.DisplayName(), uniqueEvents[0])
+		} else {
+			label = fmt.Sprintf("%s: skipped %d hooks (events not supported: %s)",
+				client.DisplayName(), len(skips), strings.Join(uniqueEvents, ", "))
+		}
+		styledOut.ListItem("⊘", label)
 	}
 
 	// Build list of successfully installed assets

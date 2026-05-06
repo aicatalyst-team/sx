@@ -227,8 +227,8 @@ const (
 //
 // The original error is preserved on the AssetResult even when the status
 // is StatusSkipped so callers can introspect *why* the asset was skipped
-// (for example, a `--strict` mode that escalates unsupported-event skips
-// back into hard failures).
+// (for example, to aggregate unsupported-event skips into a per-client
+// summary line, or to escalate them in `--strict` mode).
 //
 // All other non-nil errors are reported as StatusFailed.
 //

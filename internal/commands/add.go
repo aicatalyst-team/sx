@@ -14,6 +14,7 @@ import (
 	"github.com/sleuth-io/sx/internal/config"
 	"github.com/sleuth-io/sx/internal/github"
 	"github.com/sleuth-io/sx/internal/lockfile"
+	"github.com/sleuth-io/sx/internal/metadata"
 	"github.com/sleuth-io/sx/internal/ui"
 	"github.com/sleuth-io/sx/internal/ui/components"
 	vaultpkg "github.com/sleuth-io/sx/internal/vault"
@@ -483,6 +484,14 @@ func addNewAsset(ctx context.Context, out *outputHelper, status *components.Stat
 	// Always update metadata.toml to ensure version is correct
 	zipData, err := updateMetadataInZip(meta, zipData, metadataExists)
 	if err != nil {
+		return err
+	}
+
+	// Validate the (possibly user-authored) metadata before it enters the
+	// vault. Catches problems like unknown hook events that would otherwise
+	// pass `sx add` and only fail at install time. ValidateZip already wraps
+	// its errors with a "metadata validation failed:" prefix.
+	if err := metadata.ValidateZip(zipData, &assetType); err != nil {
 		return err
 	}
 
