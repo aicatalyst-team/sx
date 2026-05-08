@@ -10,10 +10,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sleuth-io/sx/internal/cache"
 	"github.com/sleuth-io/sx/internal/logger"
 	"github.com/sleuth-io/sx/internal/manifest"
 	"github.com/sleuth-io/sx/internal/mgmt"
 )
+
+// usagePushInterval is the minimum gap between successive
+// commit-and-push cycles for usage events. Picked to balance
+// freshness against git history volume — at one hour, even an
+// always-on user produces at most ~24 usage commits per day.
+var usagePushInterval = time.Hour
 
 // runInVaultTx is the git vault's transactional wrapper for management
 // mutations. Contract:
@@ -255,14 +262,22 @@ func (g *GitVault) ClearAssetInstallations(ctx context.Context, assetName string
 	})
 }
 
-// RecordUsageEvents appends usage events to the local JSONL log without
-// committing or pushing. Under active use this can run hundreds of times
-// per hour, and a commit-per-call would spam the git history and turn a
-// background observation channel into a noisy multi-writer workload. The
-// next management mutation (team, install, etc.) runs runInVaultTx,
-// which sweeps .sx/ into its commit and picks up any queued usage files
-// on the way through. Queries on the same machine see the events
-// immediately because GetUsageStats reads the local working tree.
+// RecordUsageEvents appends usage events to the local JSONL log and,
+// at most once per usagePushInterval, commits and pushes the queued
+// .sx/usage files to the remote.
+//
+// Under active use this can run hundreds of times per hour, and a
+// commit-per-call would spam the git history and turn a background
+// observation channel into a noisy multi-writer workload. Originally
+// the design relied on the next management mutation (team, install,
+// etc.) running runInVaultTx to sweep .sx/ into its commit, but
+// users who only consume assets never trigger such a mutation, so
+// their usage events would accumulate locally and never reach the
+// remote. Throttled push closes that gap without per-call spam.
+//
+// Queries on the same machine see events immediately because
+// GetUsageStats reads the local working tree regardless of push
+// state.
 func (g *GitVault) RecordUsageEvents(ctx context.Context, events []mgmt.UsageEvent) error {
 	if len(events) == 0 {
 		return nil
@@ -288,7 +303,97 @@ func (g *GitVault) RecordUsageEvents(ctx context.Context, events []mgmt.UsageEve
 	if err != nil {
 		return err
 	}
-	return commonRecordUsageEvents(g.repoPath, actor, events)
+	if err := commonRecordUsageEvents(g.repoPath, actor, events); err != nil {
+		return err
+	}
+
+	if err := g.maybePushUsage(ctx); err != nil {
+		// Push failures shouldn't drop the events — they remain on
+		// disk and will be retried on the next call. Log and return
+		// nil so the hook caller doesn't error out.
+		logger.Get().Warn("usage push failed; events remain queued locally",
+			"error", err,
+			"repo_path", g.repoPath)
+	}
+	return nil
+}
+
+// usagePushSentinelPath returns the path of the per-clone marker
+// whose mtime records the last successful usage push. The sentinel
+// lives under the cache dir (not the working tree) so it isn't
+// accidentally swept into a runInVaultTx commit and propagated to
+// other clones.
+func (g *GitVault) usagePushSentinelPath() (string, error) {
+	cacheDir, err := cache.GetCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cacheDir, "git-repos", filepath.Base(g.repoPath)+".usage-pushed"), nil
+}
+
+// maybePushUsage commits and pushes pending .sx/usage entries when
+// more than usagePushInterval has elapsed since the last successful
+// push. The caller must already hold the vault file lock.
+func (g *GitVault) maybePushUsage(ctx context.Context) error {
+	sentinel, err := g.usagePushSentinelPath()
+	if err != nil {
+		return err
+	}
+	if info, statErr := os.Stat(sentinel); statErr == nil {
+		if time.Since(info.ModTime()) < usagePushInterval {
+			return nil
+		}
+	} else if !os.IsNotExist(statErr) {
+		return statErr
+	}
+
+	if err := g.cloneOrUpdate(ctx); err != nil {
+		return fmt.Errorf("failed to clone/update repository: %w", err)
+	}
+
+	// Stage only .sx/usage so a stale or partial write elsewhere in
+	// the working tree doesn't ride along with the usage commit.
+	usageDir := filepath.Join(g.repoPath, mgmt.UsageDirName)
+	if _, statErr := os.Stat(usageDir); os.IsNotExist(statErr) {
+		return touchSentinel(sentinel)
+	}
+	if err := g.gitClient.Add(ctx, g.repoPath, mgmt.UsageDirName); err != nil {
+		return err
+	}
+
+	hasChanges, err := g.gitClient.HasStagedChanges(ctx, g.repoPath)
+	if err != nil {
+		return err
+	}
+	if !hasChanges {
+		return touchSentinel(sentinel)
+	}
+
+	if err := g.gitClient.Commit(ctx, g.repoPath, "Record usage events"); err != nil {
+		return err
+	}
+	if err := g.pushWithRebaseRetry(ctx); err != nil {
+		return err
+	}
+	return touchSentinel(sentinel)
+}
+
+// touchSentinel updates (or creates) the sentinel file with the
+// current mtime. Failures are returned to the caller so a flaky
+// filesystem doesn't silently degrade us into push-on-every-call.
+func touchSentinel(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	now := time.Now()
+	if err := os.Chtimes(path, now, now); err == nil {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 func (g *GitVault) GetUsageStats(ctx context.Context, filter mgmt.UsageFilter) (*mgmt.UsageSummary, error) {
