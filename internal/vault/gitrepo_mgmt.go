@@ -332,15 +332,45 @@ func (g *GitVault) usagePushSentinelPath() (string, error) {
 	return filepath.Join(cacheDir, "git-repos", filepath.Base(g.repoPath)+".usage-pushed"), nil
 }
 
-// maybePushUsage commits and pushes pending .sx/usage entries when
+// maybePushUsage commits any pending .sx/usage changes and, when
 // more than usagePushInterval has elapsed since the last successful
-// push. The caller must already hold the vault file lock and have
-// already synced the working tree via cloneOrUpdate.
+// push, pushes the local branch to the remote. The caller must
+// already hold the vault file lock and have already synced the
+// working tree via cloneOrUpdate.
+//
+// Committing is unconditional even inside the throttle window:
+// leaving uncommitted appends in the working tree across fresh
+// `report-usage` processes would wedge the next pull as soon as a
+// concurrent writer touched the same monthly file. Throttling only
+// the push keeps the tree clean while still bounding remote-history
+// volume.
 func (g *GitVault) maybePushUsage(ctx context.Context) error {
 	sentinel, err := g.usagePushSentinelPath()
 	if err != nil {
 		return err
 	}
+
+	// Stage only .sx/usage so a stale or partial write elsewhere in
+	// the working tree doesn't ride along with the usage commit.
+	usageDir := filepath.Join(g.repoPath, mgmt.UsageDirName)
+	if _, statErr := os.Stat(usageDir); !os.IsNotExist(statErr) {
+		if err := g.gitClient.Add(ctx, g.repoPath, mgmt.UsageDirName); err != nil {
+			return err
+		}
+		hasChanges, err := g.gitClient.HasStagedChanges(ctx, g.repoPath)
+		if err != nil {
+			return err
+		}
+		if hasChanges {
+			if err := g.gitClient.Commit(ctx, g.repoPath, "Record usage events"); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Throttle only the push. Any local commits made above stay in
+	// place; pushWithRebaseRetry will batch them on the next call
+	// past the throttle window.
 	if info, statErr := os.Stat(sentinel); statErr == nil {
 		if time.Since(info.ModTime()) < usagePushInterval {
 			return nil
@@ -349,27 +379,6 @@ func (g *GitVault) maybePushUsage(ctx context.Context) error {
 		return statErr
 	}
 
-	// Stage only .sx/usage so a stale or partial write elsewhere in
-	// the working tree doesn't ride along with the usage commit.
-	usageDir := filepath.Join(g.repoPath, mgmt.UsageDirName)
-	if _, statErr := os.Stat(usageDir); os.IsNotExist(statErr) {
-		return touchSentinel(sentinel)
-	}
-	if err := g.gitClient.Add(ctx, g.repoPath, mgmt.UsageDirName); err != nil {
-		return err
-	}
-
-	hasChanges, err := g.gitClient.HasStagedChanges(ctx, g.repoPath)
-	if err != nil {
-		return err
-	}
-	if !hasChanges {
-		return touchSentinel(sentinel)
-	}
-
-	if err := g.gitClient.Commit(ctx, g.repoPath, "Record usage events"); err != nil {
-		return err
-	}
 	if err := g.pushWithRebaseRetry(ctx); err != nil {
 		return err
 	}

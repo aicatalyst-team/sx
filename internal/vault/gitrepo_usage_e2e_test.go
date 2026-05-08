@@ -215,6 +215,153 @@ func TestGitVault_RecordUsageEvents_ConcurrentWriterRemoteAhead(t *testing.T) {
 	}
 }
 
+// TestGitVault_RecordUsageEvents_ThrottledThenConcurrentWriter is a
+// regression test for the steady-state production scenario flagged
+// in PR review: under multi-writer load each `report-usage` is a
+// fresh process, so a previous throttled call must NOT leave the
+// working tree dirty. Sequence:
+//
+//  1. Record (push) — sentinel set; tree clean afterwards.
+//  2. Record (throttled, fresh process) — commit must still happen
+//     so the tree stays clean; only the push is suppressed.
+//  3. Concurrent writer pushes a commit touching the same monthly
+//     file.
+//  4. Record again (still fresh process, sentinel rewound past the
+//     window) — pull must succeed against a clean tree, the queued
+//     local commits must merge with the concurrent writer's, and
+//     the final push must land.
+//
+// Pre-fix maybePushUsage skipped the commit when throttled, leaving
+// .sx/usage/YYYY-MM.jsonl dirty across processes. Step 4's pull
+// would then fail with "local changes would be overwritten" and
+// pushes would stall indefinitely.
+func TestGitVault_RecordUsageEvents_ThrottledThenConcurrentWriter(t *testing.T) {
+	mgmt.ResetActorCache()
+
+	cacheDir := t.TempDir()
+	t.Setenv("SX_CACHE_DIR", cacheDir)
+
+	remoteDir := filepath.Join(t.TempDir(), "vault.git")
+	gitRun(t, "", "init", "--bare", "-b", "main", remoteDir)
+
+	monthFile := time.Now().UTC().Format("2006-01") + ".jsonl"
+	monthRel := filepath.Join(".sx", "usage", monthFile)
+
+	// Initial seed so the remote has a main branch to pull from.
+	seedDir := filepath.Join(t.TempDir(), "seed")
+	gitRun(t, "", "init", "-b", "main", seedDir)
+	gitRun(t, seedDir, "config", "user.email", "seed@example.com")
+	gitRun(t, seedDir, "config", "user.name", "Seed")
+	if err := os.WriteFile(filepath.Join(seedDir, "README.md"), []byte("seed\n"), 0644); err != nil {
+		t.Fatalf("write seed README: %v", err)
+	}
+	gitRun(t, seedDir, "add", ".")
+	gitRun(t, seedDir, "commit", "-m", "seed")
+	gitRun(t, seedDir, "remote", "add", "origin", remoteDir)
+	gitRun(t, seedDir, "push", "origin", "main")
+
+	repoURL := "file://" + remoteDir
+	v, err := NewGitVault(repoURL)
+	if err != nil {
+		t.Fatalf("NewGitVault: %v", err)
+	}
+	ctx := context.Background()
+
+	if _, _, _, err := v.GetLockFile(ctx, ""); err != nil {
+		t.Fatalf("GetLockFile (priming clone): %v", err)
+	}
+	gitRun(t, v.repoPath, "config", "user.email", "alice@example.com")
+	gitRun(t, v.repoPath, "config", "user.name", "Alice")
+
+	// Step 1: first record-usage pushes and sets the sentinel.
+	if err := v.RecordUsageEvents(ctx, []mgmt.UsageEvent{
+		{Actor: "alice@example.com", AssetName: "skill-a", AssetVersion: "1.0.0", AssetType: "skill"},
+	}); err != nil {
+		t.Fatalf("RecordUsageEvents step 1: %v", err)
+	}
+	if dirty := workingTreeStatus(t, v.repoPath); dirty != "" {
+		t.Fatalf("expected working tree clean after step 1, got:\n%s", dirty)
+	}
+
+	// Step 2: simulate a fresh process inside the throttle window.
+	// Sentinel is fresh, so push is suppressed; the commit must still
+	// happen so the tree stays clean.
+	v.hasSynced = false
+	if err := v.RecordUsageEvents(ctx, []mgmt.UsageEvent{
+		{Actor: "alice@example.com", AssetName: "skill-b", AssetVersion: "1.0.0", AssetType: "skill"},
+	}); err != nil {
+		t.Fatalf("RecordUsageEvents step 2 (throttled): %v", err)
+	}
+	if dirty := workingTreeStatus(t, v.repoPath); dirty != "" {
+		t.Fatalf("expected working tree clean after throttled step 2 — dirty tree wedges future pulls, got:\n%s", dirty)
+	}
+
+	// Step 3: concurrent writer pushes a commit touching the same
+	// monthly file via the seed clone.
+	gitRun(t, seedDir, "pull", "origin", "main")
+	if err := os.MkdirAll(filepath.Join(seedDir, ".sx", "usage"), 0755); err != nil {
+		t.Fatalf("mkdir seed usage: %v", err)
+	}
+	concurrentLine := `{"ts":"2026-05-08T00:00:00Z","actor":"bob@example.com","asset_name":"skill-c","asset_version":"1.0.0","asset_type":"skill"}` + "\n"
+	f, err := os.OpenFile(filepath.Join(seedDir, monthRel), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatalf("open seed monthly file for append: %v", err)
+	}
+	if _, err := f.WriteString(concurrentLine); err != nil {
+		t.Fatalf("append concurrent line: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close seed monthly file: %v", err)
+	}
+	gitRun(t, seedDir, "add", monthRel)
+	gitRun(t, seedDir, "commit", "-m", "concurrent writer adds line")
+	gitRun(t, seedDir, "push", "origin", "main")
+
+	// Step 4: rewind the sentinel past the throttle window AND drop
+	// hasSynced so the next call must pull. Pre-fix the dirty tree
+	// from step 2 would now wedge cloneOrUpdate; post-fix the tree
+	// is clean and the pull succeeds.
+	sentinel, err := v.usagePushSentinelPath()
+	if err != nil {
+		t.Fatalf("usagePushSentinelPath: %v", err)
+	}
+	old := time.Now().Add(-2 * usagePushInterval)
+	if err := os.Chtimes(sentinel, old, old); err != nil {
+		t.Fatalf("rewind sentinel mtime: %v", err)
+	}
+	v.hasSynced = false
+
+	if err := v.RecordUsageEvents(ctx, []mgmt.UsageEvent{
+		{Actor: "alice@example.com", AssetName: "skill-d", AssetVersion: "1.0.0", AssetType: "skill"},
+	}); err != nil {
+		t.Fatalf("RecordUsageEvents step 4 (concurrent writer ahead): %v", err)
+	}
+
+	// Remote must contain the concurrent writer's line AND alice's
+	// queued events; otherwise we either lost a merge or never pushed.
+	finalRemote := gitOut(t, remoteDir, "show", "HEAD:"+monthRel)
+	if !strings.Contains(finalRemote, "bob@example.com") {
+		t.Fatalf("concurrent writer's line missing from remote after merge:\n%s", finalRemote)
+	}
+	for _, asset := range []string{"skill-a", "skill-b", "skill-d"} {
+		if !strings.Contains(finalRemote, asset) {
+			t.Fatalf("expected %s in pushed monthly file:\n%s", asset, finalRemote)
+		}
+	}
+}
+
+// workingTreeStatus returns the porcelain status of the .sx/usage
+// path inside the given working tree (empty when clean). The full
+// tree may legitimately contain other untracked files (e.g.
+// sx.toml synthesized by GetLockFile during priming) — those don't
+// wedge a pull. The bug we're guarding against is uncommitted
+// changes on the monthly JSONL specifically, since that's the file
+// concurrent writers also touch.
+func workingTreeStatus(t *testing.T, repoPath string) string {
+	t.Helper()
+	return strings.TrimSpace(gitOut(t, repoPath, "status", "--porcelain", "--", ".sx/usage"))
+}
+
 // remoteHasUsageCommit returns true when the remote bare repo contains
 // a commit whose subject matches the pusher's "Record usage events"
 // message.
