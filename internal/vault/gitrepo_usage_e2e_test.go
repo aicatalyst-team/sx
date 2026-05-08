@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -116,6 +117,104 @@ func TestGitVault_RecordUsageEvents_PushesToRemote(t *testing.T) {
 	}
 }
 
+// TestGitVault_RecordUsageEvents_ConcurrentWriterRemoteAhead is a
+// regression test for the multi-writer dirty-tree race. Setup:
+//   - Local clone is at commit A, which seeded the monthly usage file.
+//   - A concurrent writer pushes commit B touching the same monthly
+//     file before we run record-usage again.
+//   - We then call RecordUsageEvents in a fresh-process state
+//     (hasSynced=false) so a pull is required.
+//
+// Pre-fix ordering: append → pull. The pull would refuse to merge B
+// because our local monthly file is dirty, RecordUsageEvents would
+// log a warning and bail, the sentinel would never advance, and
+// pushes would stall on every subsequent call. Post-fix: pull → append
+// → push, so B merges into a clean tree and our append + push lands.
+func TestGitVault_RecordUsageEvents_ConcurrentWriterRemoteAhead(t *testing.T) {
+	mgmt.ResetActorCache()
+
+	cacheDir := t.TempDir()
+	t.Setenv("SX_CACHE_DIR", cacheDir)
+
+	remoteDir := filepath.Join(t.TempDir(), "vault.git")
+	gitRun(t, "", "init", "--bare", "-b", "main", remoteDir)
+
+	monthFile := time.Now().UTC().Format("2006-01") + ".jsonl"
+	monthRel := filepath.Join(".sx", "usage", monthFile)
+
+	// Seed commit A: monthly usage file with one entry.
+	seedDir := filepath.Join(t.TempDir(), "seed")
+	gitRun(t, "", "init", "-b", "main", seedDir)
+	gitRun(t, seedDir, "config", "user.email", "seed@example.com")
+	gitRun(t, seedDir, "config", "user.name", "Seed")
+	if err := os.MkdirAll(filepath.Join(seedDir, ".sx", "usage"), 0755); err != nil {
+		t.Fatalf("mkdir seed usage: %v", err)
+	}
+	seedLine := `{"ts":"2026-01-01T00:00:00Z","actor":"seed@example.com","asset_name":"seed-skill","asset_version":"1.0.0","asset_type":"skill"}` + "\n"
+	if err := os.WriteFile(filepath.Join(seedDir, monthRel), []byte(seedLine), 0644); err != nil {
+		t.Fatalf("write seed monthly file: %v", err)
+	}
+	gitRun(t, seedDir, "add", ".")
+	gitRun(t, seedDir, "commit", "-m", "seed monthly usage")
+	gitRun(t, seedDir, "remote", "add", "origin", remoteDir)
+	gitRun(t, seedDir, "push", "origin", "main")
+
+	repoURL := "file://" + remoteDir
+	v, err := NewGitVault(repoURL)
+	if err != nil {
+		t.Fatalf("NewGitVault: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Prime: clone the remote into our cache so we land at commit A.
+	if _, _, _, err := v.GetLockFile(ctx, ""); err != nil {
+		t.Fatalf("GetLockFile (priming clone): %v", err)
+	}
+	gitRun(t, v.repoPath, "config", "user.email", "alice@example.com")
+	gitRun(t, v.repoPath, "config", "user.name", "Alice")
+
+	// Concurrent-writer commit B: append another line to the same
+	// monthly file from the seed clone and push. After this push, our
+	// clone at v.repoPath is one commit behind on a file that
+	// record-usage is about to touch.
+	concurrentLine := `{"ts":"2026-01-02T00:00:00Z","actor":"bob@example.com","asset_name":"seed-skill","asset_version":"1.0.0","asset_type":"skill"}` + "\n"
+	f, err := os.OpenFile(filepath.Join(seedDir, monthRel), os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatalf("open seed monthly file for append: %v", err)
+	}
+	if _, err := f.WriteString(concurrentLine); err != nil {
+		t.Fatalf("append concurrent line: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close seed monthly file: %v", err)
+	}
+	gitRun(t, seedDir, "add", monthRel)
+	gitRun(t, seedDir, "commit", "-m", "concurrent writer adds line")
+	gitRun(t, seedDir, "push", "origin", "main")
+
+	// Fresh-process semantics: drop the sync latch so RecordUsageEvents
+	// must actually pull commit B.
+	v.hasSynced = false
+
+	events := []mgmt.UsageEvent{
+		{Actor: "alice@example.com", AssetName: "my-skill", AssetVersion: "1.0.0", AssetType: "skill"},
+	}
+	if err := v.RecordUsageEvents(ctx, events); err != nil {
+		t.Fatalf("RecordUsageEvents with concurrent writer: %v", err)
+	}
+
+	if !remoteHasUsageCommit(t, remoteDir) {
+		t.Fatal("expected remote to receive a usage commit when remote was ahead on monthly file")
+	}
+	// And the concurrent writer's line must still be present on the
+	// remote — i.e. we merged, not overwrote.
+	headFile := gitOut(t, remoteDir, "show", "HEAD~1:"+monthRel)
+	if !strings.Contains(headFile, "bob@example.com") {
+		t.Fatalf("expected concurrent writer's line preserved on remote; got %q", headFile)
+	}
+}
+
 // remoteHasUsageCommit returns true when the remote bare repo contains
 // a commit whose subject matches the pusher's "Record usage events"
 // message.
@@ -133,12 +232,9 @@ func remoteHasUsageCommit(t *testing.T, bareDir string) bool {
 func remoteCommitCount(t *testing.T, bareDir string) int {
 	t.Helper()
 	out := strings.TrimSpace(gitOut(t, bareDir, "rev-list", "--count", "HEAD"))
-	n := 0
-	for _, c := range out {
-		if c < '0' || c > '9' {
-			t.Fatalf("unexpected rev-list output %q", out)
-		}
-		n = n*10 + int(c-'0')
+	n, err := strconv.Atoi(out)
+	if err != nil {
+		t.Fatalf("unexpected rev-list output %q: %v", out, err)
 	}
 	return n
 }

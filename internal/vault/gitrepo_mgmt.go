@@ -288,13 +288,14 @@ func (g *GitVault) RecordUsageEvents(ctx context.Context, events []mgmt.UsageEve
 	}
 	defer func() { _ = fileLock.Unlock() }()
 
-	// Ensure the working tree exists before appending; if it doesn't,
-	// fall through to a full tx so the first-ever event still gets
-	// written and pushed.
-	if _, statErr := os.Stat(g.repoPath); statErr != nil {
-		if err := g.cloneOrUpdate(ctx); err != nil {
-			return fmt.Errorf("failed to clone/update repository: %w", err)
-		}
+	// Sync to remote BEFORE dirtying the working tree. If we appended
+	// first and pulled later, a remote commit touching the same monthly
+	// JSONL would make `git pull` refuse the merge ("local changes
+	// would be overwritten") and pushes would stall — under multi-
+	// writer contention this is the common case, not the edge case.
+	// This matches runInVaultTx's clone-then-mutate ordering.
+	if err := g.cloneOrUpdate(ctx); err != nil {
+		return fmt.Errorf("failed to clone/update repository: %w", err)
 	}
 	if err := ensureSxDir(g.repoPath); err != nil {
 		return err
@@ -333,7 +334,8 @@ func (g *GitVault) usagePushSentinelPath() (string, error) {
 
 // maybePushUsage commits and pushes pending .sx/usage entries when
 // more than usagePushInterval has elapsed since the last successful
-// push. The caller must already hold the vault file lock.
+// push. The caller must already hold the vault file lock and have
+// already synced the working tree via cloneOrUpdate.
 func (g *GitVault) maybePushUsage(ctx context.Context) error {
 	sentinel, err := g.usagePushSentinelPath()
 	if err != nil {
@@ -345,10 +347,6 @@ func (g *GitVault) maybePushUsage(ctx context.Context) error {
 		}
 	} else if !os.IsNotExist(statErr) {
 		return statErr
-	}
-
-	if err := g.cloneOrUpdate(ctx); err != nil {
-		return fmt.Errorf("failed to clone/update repository: %w", err)
 	}
 
 	// Stage only .sx/usage so a stale or partial write elsewhere in
@@ -379,21 +377,23 @@ func (g *GitVault) maybePushUsage(ctx context.Context) error {
 }
 
 // touchSentinel updates (or creates) the sentinel file with the
-// current mtime. Failures are returned to the caller so a flaky
-// filesystem doesn't silently degrade us into push-on-every-call.
+// current mtime. Always creates-then-Chtimes so a transient Chtimes
+// failure on an existing file isn't masked by a successful OpenFile —
+// a stale mtime would expire the throttle on every subsequent call.
+// Errors are returned to the caller.
 func touchSentinel(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
-	}
-	now := time.Now()
-	if err := os.Chtimes(path, now, now); err == nil {
-		return nil
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return err
+	}
+	now := time.Now()
+	return os.Chtimes(path, now, now)
 }
 
 func (g *GitVault) GetUsageStats(ctx context.Context, filter mgmt.UsageFilter) (*mgmt.UsageSummary, error) {
