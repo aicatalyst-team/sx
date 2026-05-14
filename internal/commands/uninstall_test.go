@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -8,8 +9,52 @@ import (
 
 	"github.com/sleuth-io/sx/internal/asset"
 	"github.com/sleuth-io/sx/internal/assets"
+	"github.com/sleuth-io/sx/internal/bootstrap"
+	"github.com/sleuth-io/sx/internal/clients"
 	"github.com/sleuth-io/sx/internal/gitutil"
+	"github.com/sleuth-io/sx/internal/lockfile"
 )
+
+// stubClient is a minimal clients.Client implementation for testing
+type stubClient struct {
+	id string
+}
+
+func (s *stubClient) ID() string          { return s.id }
+func (s *stubClient) DisplayName() string { return s.id }
+func (s *stubClient) IsInstalled() bool   { return true }
+func (s *stubClient) GetVersion() string  { return "" }
+func (s *stubClient) SupportsAssetType(asset.Type) bool {
+	return true
+}
+func (s *stubClient) InstallAssets(context.Context, clients.InstallRequest) (clients.InstallResponse, error) {
+	return clients.InstallResponse{}, nil
+}
+func (s *stubClient) UninstallAssets(context.Context, clients.UninstallRequest) (clients.UninstallResponse, error) {
+	return clients.UninstallResponse{}, nil
+}
+func (s *stubClient) ListAssets(context.Context, *clients.InstallScope) ([]clients.InstalledSkill, error) {
+	return nil, nil
+}
+func (s *stubClient) ReadSkill(context.Context, string, *clients.InstallScope) (*clients.SkillContent, error) {
+	return &clients.SkillContent{}, nil
+}
+func (s *stubClient) EnsureAssetSupport(context.Context, *clients.InstallScope) error { return nil }
+func (s *stubClient) GetBootstrapOptions(context.Context) []bootstrap.Option          { return nil }
+func (s *stubClient) GetBootstrapPath() string                                        { return "" }
+func (s *stubClient) InstallBootstrap(context.Context, []bootstrap.Option) error      { return nil }
+func (s *stubClient) UninstallBootstrap(context.Context, []bootstrap.Option) error    { return nil }
+func (s *stubClient) ShouldInstall(context.Context) (bool, error)                     { return true, nil }
+func (s *stubClient) VerifyAssets(context.Context, []*lockfile.Asset, *clients.InstallScope) []clients.VerifyResult {
+	return nil
+}
+func (s *stubClient) ScanInstalledAssets(context.Context, *clients.InstallScope) ([]clients.InstalledAsset, error) {
+	return nil, nil
+}
+func (s *stubClient) GetAssetPath(context.Context, string, asset.Type, *clients.InstallScope) (string, error) {
+	return "", nil
+}
+func (s *stubClient) RuleCapabilities() *clients.RuleCapabilities { return nil }
 
 func TestFilterUninstallPlanByScope(t *testing.T) {
 	// Shared tracker data: 2 global, 2 repo-A (one path-scoped), 1 repo-B
@@ -512,6 +557,68 @@ func TestUpdateTrackerPartialClientRemoval(t *testing.T) {
 			for key := range tt.expectedClients {
 				if !slices.Contains(tt.expectedRemoved, key) {
 					t.Errorf("expected asset %q not found in tracker", key)
+				}
+			}
+		})
+	}
+}
+
+func TestFilterClientsByFlag(t *testing.T) {
+	allClients := []clients.Client{
+		&stubClient{id: "claude-code"},
+		&stubClient{id: "cursor"},
+		&stubClient{id: "gemini"},
+	}
+
+	tests := []struct {
+		name    string
+		flag    string
+		wantIDs []string
+	}{
+		{
+			name:    "single client",
+			flag:    "cursor",
+			wantIDs: []string{"cursor"},
+		},
+		{
+			name:    "multiple clients",
+			flag:    "claude-code,gemini",
+			wantIDs: []string{"claude-code", "gemini"},
+		},
+		{
+			name:    "with spaces",
+			flag:    "claude-code , cursor",
+			wantIDs: []string{"claude-code", "cursor"},
+		},
+		{
+			name:    "no match",
+			flag:    "unknown",
+			wantIDs: []string{},
+		},
+		{
+			name:    "all clients",
+			flag:    "claude-code,cursor,gemini",
+			wantIDs: []string{"claude-code", "cursor", "gemini"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := filterClientsByFlag(allClients, tt.flag)
+
+			gotIDs := make([]string, len(result))
+			for i, c := range result {
+				gotIDs[i] = c.ID()
+			}
+
+			if len(gotIDs) != len(tt.wantIDs) {
+				t.Errorf("got %d clients %v, want %d clients %v", len(gotIDs), gotIDs, len(tt.wantIDs), tt.wantIDs)
+				return
+			}
+
+			for i, id := range tt.wantIDs {
+				if gotIDs[i] != id {
+					t.Errorf("client[%d] = %q, want %q", i, gotIDs[i], id)
 				}
 			}
 		})

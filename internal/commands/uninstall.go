@@ -200,7 +200,7 @@ func runUninstall(cmd *cobra.Command, args []string, opts UninstallOptions) erro
 		}
 	}
 
-	// Step 5: Display plan and confirm
+	// Step 6: Display plan and confirm
 	displayUninstallPlan(plan, styledOut)
 
 	if opts.All {
@@ -219,26 +219,26 @@ func runUninstall(cmd *cobra.Command, args []string, opts UninstallOptions) erro
 		return nil
 	}
 
-	// Step 5: Execute uninstall
+	// Step 7: Execute uninstall
 	styledOut.Newline()
 	styledOut.Header("Uninstalling assets...")
 	results := executeUninstall(ctx, plan, opts, styledOut)
 
-	// Step 6: Update tracker
+	// Step 8: Update tracker
 	if err := updateTracker(results, plan, out); err != nil {
 		out.printfErr("Warning: failed to update tracker: %v\n", err)
 		logger.Get().Error("failed to update tracker", "error", err)
 	}
 
-	// Step 7: Regenerate client support
+	// Step 9: Regenerate client support
 	regenerateClientSupport(ctx, plan, results, out)
 
-	// Step 8: Uninstall system hooks if --all flag is passed
+	// Step 10: Uninstall system hooks if --all flag is passed
 	if opts.All {
 		uninstallSystemHooks(ctx, opts.ClientsFlag, styledOut)
 	}
 
-	// Step 9: Report results
+	// Step 11: Report results
 	reportResults(results, styledOut)
 
 	return nil
@@ -406,8 +406,8 @@ func filterUninstallPlanByScope(plan UninstallPlan, all bool) UninstallPlan {
 		return plan
 	}
 
-	// Outside a repo: no-op
-	if !plan.GitContext.IsRepo {
+	// Outside a repo (or no git context): no-op
+	if plan.GitContext == nil || !plan.GitContext.IsRepo {
 		plan.Assets = nil
 		return plan
 	}
@@ -702,20 +702,7 @@ func uninstallSystemHooks(ctx context.Context, clientsFlag string, styledOut *ui
 
 	// Filter to specified clients if --clients flag is set
 	if clientsFlag != "" {
-		wantedClients := make(map[string]bool)
-		for id := range strings.SplitSeq(clientsFlag, ",") {
-			id = strings.TrimSpace(id)
-			if id != "" {
-				wantedClients[id] = true
-			}
-		}
-		var filtered []clients.Client
-		for _, c := range installedClients {
-			if wantedClients[c.ID()] {
-				filtered = append(filtered, c)
-			}
-		}
-		installedClients = filtered
+		installedClients = filterClientsByFlag(installedClients, clientsFlag)
 	}
 
 	// Load config to get enabled bootstrap options
