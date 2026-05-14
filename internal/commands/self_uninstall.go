@@ -149,18 +149,15 @@ func runSelfUninstall(cmd *cobra.Command, opts SelfUninstallOptions) error {
 	// Step 1: uninstall all assets via the existing flow. If this fails,
 	// abort before deleting config/cache/binary so the user can retry — once
 	// the binary is gone, the recovery path is gone too. --force overrides.
-	//
-	// RemoveAllHooks bypasses the per-config enabled filter so any sx hook
-	// the user has since disabled in config still gets cleared — otherwise
-	// it would be left pointing at a binary we're about to delete.
+	// 'sx uninstall --all' also clears every sx-installed hook, so nothing
+	// is left pointing at the binary we're about to delete.
 	if !opts.KeepAssets {
 		styledOut.Newline()
 		styledOut.Header("Uninstalling assets...")
 		assetOpts := UninstallOptions{
-			All:            true,
-			Yes:            true,
-			Verbose:        opts.Verbose,
-			RemoveAllHooks: true,
+			All:     true,
+			Yes:     true,
+			Verbose: opts.Verbose,
 		}
 		if err := assetCleanupFn(cmd, nil, assetOpts); err != nil {
 			if !opts.Force {
