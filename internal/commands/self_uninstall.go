@@ -57,7 +57,23 @@ On Windows, the binary cannot delete itself while it is running; you will be
 shown the path to remove manually.
 
 This action is irreversible. Use --dry-run to preview, or --keep-assets to
-leave installed assets in place.`,
+leave installed assets in place.
+
+Examples:
+  # Preview what would be removed without making changes
+  sx self-uninstall --dry-run
+
+  # Run interactively (prompts for confirmation)
+  sx self-uninstall
+
+  # Skip the confirmation prompt
+  sx self-uninstall --yes
+
+  # Remove sx but leave installed assets in place in your editors
+  sx self-uninstall --keep-assets
+
+  # Continue even if asset cleanup reports an error
+  sx self-uninstall --force`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSelfUninstall(cmd, opts)
 		},
