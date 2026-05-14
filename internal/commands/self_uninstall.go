@@ -12,8 +12,52 @@ import (
 
 	"github.com/sleuth-io/sx/internal/cache"
 	"github.com/sleuth-io/sx/internal/ui"
+	"github.com/sleuth-io/sx/internal/ui/theme"
 	"github.com/sleuth-io/sx/internal/utils"
 )
+
+// selfUninstallLongHelp renders the long help text for sx self-uninstall
+// using the same theme styles as uninstallLongHelp so both --help outputs
+// look consistent.
+func selfUninstallLongHelp() string {
+	s := theme.Current().Styles()
+	e := s.Emphasis.Render
+	m := s.Muted.Render
+
+	return `Completely remove sx from your machine.
+
+This is the inverse of the curl|bash installer. It will:
+  1. Uninstall every asset sx has installed across all scopes and clients
+     (skills, MCP servers, hooks, etc. — same as ` + e("sx uninstall --all") + `).
+  2. Delete the sx config directory.
+  3. Delete the sx cache directory.
+  4. Delete the sx binary itself.
+
+If asset cleanup fails, the command aborts before touching the config, cache,
+or binary so you can investigate and retry. Pass ` + e("--force") + ` to continue anyway.
+
+On Windows, the binary cannot delete itself while it is running; you will be
+shown the path to remove manually.
+
+This action is irreversible. Use ` + e("--dry-run") + ` to preview, or ` + e("--keep-assets") + ` to
+leave installed assets in place.
+
+` + s.Header.Render("Examples:") + `
+  ` + m("# Preview what would be removed without making changes") + `
+  ` + e("sx self-uninstall --dry-run") + `
+
+  ` + m("# Run interactively (prompts for confirmation)") + `
+  ` + e("sx self-uninstall") + `
+
+  ` + m("# Skip the confirmation prompt") + `
+  ` + e("sx self-uninstall --yes") + `
+
+  ` + m("# Remove sx but leave installed assets in place in your editors") + `
+  ` + e("sx self-uninstall --keep-assets") + `
+
+  ` + m("# Continue even if asset cleanup reports an error") + `
+  ` + e("sx self-uninstall --force")
+}
 
 // executableFn is the function used to locate the running sx binary.
 // Overridable by tests so they don't try to delete the real test binary.
@@ -41,39 +85,7 @@ func NewSelfUninstallCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "self-uninstall",
 		Short: "Completely remove sx, its config, cache, and all installed assets",
-		Long: `Completely remove sx from your machine.
-
-This is the inverse of the curl|bash installer. It will:
-  1. Uninstall every asset sx has installed across all scopes and clients
-     (skills, MCP servers, hooks, etc. — same as 'sx uninstall --all').
-  2. Delete the sx config directory.
-  3. Delete the sx cache directory.
-  4. Delete the sx binary itself.
-
-If asset cleanup fails, the command aborts before touching the config, cache,
-or binary so you can investigate and retry. Pass --force to continue anyway.
-
-On Windows, the binary cannot delete itself while it is running; you will be
-shown the path to remove manually.
-
-This action is irreversible. Use --dry-run to preview, or --keep-assets to
-leave installed assets in place.
-
-Examples:
-  # Preview what would be removed without making changes
-  sx self-uninstall --dry-run
-
-  # Run interactively (prompts for confirmation)
-  sx self-uninstall
-
-  # Skip the confirmation prompt
-  sx self-uninstall --yes
-
-  # Remove sx but leave installed assets in place in your editors
-  sx self-uninstall --keep-assets
-
-  # Continue even if asset cleanup reports an error
-  sx self-uninstall --force`,
+		Long:  selfUninstallLongHelp(),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSelfUninstall(cmd, opts)
 		},
@@ -108,6 +120,13 @@ func resolveSelfUninstallPaths() selfUninstallPaths {
 
 func runSelfUninstall(cmd *cobra.Command, opts SelfUninstallOptions) error {
 	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
+
+	// --force only matters during asset cleanup; with --keep-assets that step
+	// is skipped entirely, so the combination is a silent no-op. Reject it
+	// upfront so the user notices they passed an inert flag.
+	if opts.Force && opts.KeepAssets {
+		return errors.New("--force has no effect with --keep-assets (asset cleanup is already skipped)")
+	}
 
 	paths := resolveSelfUninstallPaths()
 

@@ -713,10 +713,17 @@ func uninstallSystemHooks(ctx context.Context, clientsFlag string, styledOut *ui
 		v, _ = vaultpkg.NewFromConfig(cfg)
 	}
 
+	uninstallHooksFromClients(ctx, installedClients, v, styledOut)
+}
+
+// uninstallHooksFromClients passes every bootstrap option each client knows
+// about — plus any vault-supplied options — to client.UninstallBootstrap.
+// No per-config "enabled" filter is applied: orphaned hooks whose option has
+// since been disabled in config would otherwise be left referencing the sx
+// binary. Extracted from uninstallSystemHooks so the contract can be
+// regression-tested with stub clients.
+func uninstallHooksFromClients(ctx context.Context, installedClients []clients.Client, v vaultpkg.Vault, styledOut *ui.Output) {
 	for _, client := range installedClients {
-		// Gather every bootstrap option from vault and client so we attempt
-		// removal of all hooks the client knows about — including ones for
-		// options the user has since disabled in config.
 		var allOpts []bootstrap.Option
 		if v != nil {
 			allOpts = append(allOpts, v.GetBootstrapOptions(ctx)...)

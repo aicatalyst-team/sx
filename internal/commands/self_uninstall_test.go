@@ -304,6 +304,37 @@ func TestSelfUninstall_AssetCleanupFailureWithForceProceeds(t *testing.T) {
 	}
 }
 
+func TestSelfUninstall_RejectsForceWithKeepAssets(t *testing.T) {
+	t.Setenv("SX_CONFIG_DIR", t.TempDir())
+	t.Setenv("SX_CACHE_DIR", t.TempDir())
+
+	stubBinary := filepath.Join(t.TempDir(), "sx")
+	if err := os.WriteFile(stubBinary, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatalf("setup stub binary: %v", err)
+	}
+
+	cmd, _ := newSelfUninstallTestCmd(t, stubBinary)
+	opts := SelfUninstallOptions{
+		Yes:         true,
+		KeepAssets:  true,
+		Force:       true,
+		keepBinary:  true,
+		skipConfirm: true,
+	}
+	err := runSelfUninstall(cmd, opts)
+	if err == nil {
+		t.Fatal("expected runSelfUninstall to reject --force + --keep-assets")
+	}
+	if !strings.Contains(err.Error(), "--force") || !strings.Contains(err.Error(), "--keep-assets") {
+		t.Errorf("expected error to mention both flags, got %v", err)
+	}
+
+	// Binary must remain — we bailed before any side effects.
+	if _, err := os.Stat(stubBinary); err != nil {
+		t.Errorf("rejected combination should not touch the filesystem: %v", err)
+	}
+}
+
 func TestRemoveDirIfExists(t *testing.T) {
 	t.Run("ignores missing", func(t *testing.T) {
 		if err := removeDirIfExists(filepath.Join(t.TempDir(), "nope")); err != nil {
