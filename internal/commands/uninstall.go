@@ -73,7 +73,7 @@ func NewUninstallCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "uninstall",
 		Short: "Uninstall assets from the current repo or all scopes",
-		Long: uninstallLongHelp(),
+		Long:  uninstallLongHelp(),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := UninstallOptions{
 				All:         all,
@@ -175,16 +175,23 @@ func runUninstall(cmd *cobra.Command, args []string, opts UninstallOptions) erro
 	// Step 3: Build uninstall plan
 	plan := buildUninstallPlanFromTracker(lockFile, tracker, gitContext, trackingBase)
 
+	// Step 4: Filter plan by scope (without --all, only current repo's assets)
+	plan = filterUninstallPlanByScope(plan, opts.All)
+
 	if len(plan.Assets) == 0 {
 		// No assets to uninstall, but if --all is passed, still remove system hooks
 		if opts.All {
 			return handleAllFlagWithoutAssets(ctx, opts, styledOut)
 		}
-		styledOut.Info("No assets to uninstall")
+		if !gitContext.IsRepo {
+			styledOut.Info("Not in a repository. Use --all to uninstall from all scopes.")
+		} else {
+			styledOut.Info("No assets to uninstall in this repository")
+		}
 		return nil
 	}
 
-	// Step 4: Filter plan by client flag if provided
+	// Step 5: Filter plan by client flag if provided
 	if opts.ClientsFlag != "" {
 		plan = filterUninstallPlanByClients(plan, opts.ClientsFlag)
 		if len(plan.Assets) == 0 {
@@ -228,7 +235,7 @@ func runUninstall(cmd *cobra.Command, args []string, opts UninstallOptions) erro
 
 	// Step 8: Uninstall system hooks if --all flag is passed
 	if opts.All {
-		uninstallSystemHooks(ctx, styledOut)
+		uninstallSystemHooks(ctx, opts.ClientsFlag, styledOut)
 	}
 
 	// Step 9: Report results
@@ -254,7 +261,7 @@ func handleAllFlagWithoutAssets(ctx context.Context, opts UninstallOptions, styl
 		return nil
 	}
 
-	uninstallSystemHooks(ctx, styledOut)
+	uninstallSystemHooks(ctx, opts.ClientsFlag, styledOut)
 	styledOut.Success("System hooks removed")
 	return nil
 }
@@ -387,6 +394,33 @@ func buildUninstallPlanFromTracker(lockFile *lockfile.LockFile, tracker *assets.
 		})
 	}
 
+	return plan
+}
+
+// filterUninstallPlanByScope filters the plan based on git context and --all flag.
+// Without --all: only repo-scoped assets matching the current repo (global assets are never included).
+// Outside a repo without --all: returns an empty plan (no-op).
+// With --all: returns all assets unfiltered.
+func filterUninstallPlanByScope(plan UninstallPlan, all bool) UninstallPlan {
+	if all {
+		return plan
+	}
+
+	// Outside a repo: no-op
+	if !plan.GitContext.IsRepo {
+		plan.Assets = nil
+		return plan
+	}
+
+	// Inside a repo: only assets matching this repo
+	repoURL := plan.GitContext.RepoURL
+	var filtered []AssetUninstallPlan
+	for _, a := range plan.Assets {
+		if !a.IsGlobal && a.Repository == repoURL {
+			filtered = append(filtered, a)
+		}
+	}
+	plan.Assets = filtered
 	return plan
 }
 
@@ -657,13 +691,32 @@ func confirmUninstall(styledOut *ui.Output) bool {
 	return response == "y" || response == "yes"
 }
 
-// uninstallSystemHooks removes system hooks from all installed clients
-func uninstallSystemHooks(ctx context.Context, styledOut *ui.Output) {
+// uninstallSystemHooks removes system hooks from installed clients.
+// If clientsFlag is non-empty, only hooks for those clients are removed.
+func uninstallSystemHooks(ctx context.Context, clientsFlag string, styledOut *ui.Output) {
 	styledOut.Newline()
 	styledOut.Header("Removing system hooks...")
 
 	registry := clients.Global()
 	installedClients := registry.DetectInstalled()
+
+	// Filter to specified clients if --clients flag is set
+	if clientsFlag != "" {
+		wantedClients := make(map[string]bool)
+		for id := range strings.SplitSeq(clientsFlag, ",") {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				wantedClients[id] = true
+			}
+		}
+		var filtered []clients.Client
+		for _, c := range installedClients {
+			if wantedClients[c.ID()] {
+				filtered = append(filtered, c)
+			}
+		}
+		installedClients = filtered
+	}
 
 	// Load config to get enabled bootstrap options
 	mpc, _ := config.LoadMultiProfile()
