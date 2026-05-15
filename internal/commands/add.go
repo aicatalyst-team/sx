@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/sleuth-io/sx/internal/asset"
+	"github.com/sleuth-io/sx/internal/assets"
 	"github.com/sleuth-io/sx/internal/config"
 	"github.com/sleuth-io/sx/internal/github"
 	"github.com/sleuth-io/sx/internal/lockfile"
@@ -68,7 +70,7 @@ func NewAddCommand() *cobra.Command {
 		Use:   "add [source-or-asset-name]",
 		Short: "Add an asset or configure an existing one",
 		Long:  addLongHelp(),
-		Args: cobra.MaximumNArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var input string
 			if len(args) > 0 {
@@ -185,6 +187,20 @@ func routeSpecializedInput(ctx context.Context, cmd *cobra.Command, out *outputH
 	if IsMarketplaceReference(input) {
 		promptInstall := !opts.NoInstall && !opts.Yes
 		return true, addFromMarketplace(ctx, cmd, out, status, input, promptInstall, opts)
+	}
+
+	// Check if path points to an already-installed asset directory
+	if !isURL(input) && !github.IsTreeURL(input) {
+		if info, err := os.Stat(input); err == nil && info.IsDir() {
+			dirName := filepath.Base(input)
+			if tracker, trackerErr := assets.LoadTracker(); trackerErr == nil {
+				for _, a := range tracker.Assets {
+					if a.Name == dirName {
+						return true, configureExistingAsset(ctx, cmd, out, status, dirName, opts)
+					}
+				}
+			}
+		}
 	}
 
 	// Existing asset name (not a file, directory, or URL)
