@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/sleuth-io/sx/internal/assets"
+	"github.com/sleuth-io/sx/internal/config"
+	vaultpkg "github.com/sleuth-io/sx/internal/vault"
 )
 
 // TestAddAlreadyInstalled covers the matrix of (asset-in-vault × installed × input-form).
@@ -96,7 +98,10 @@ func addAndInstall(t *testing.T, env *TestEnv, name string) string {
 
 func TestAddAlreadyInstalled(t *testing.T) {
 	// Scenario 1: `sx add <name>` — asset is in vault AND installed (manifest intact).
-	// Expected: configure-existing flow runs, output shows asset is installed.
+	// Expected: name resolves to the installed on-disk directory via the
+	// tracker, source-import detects identical contents, and the existing
+	// scope is preserved. This mirrors `sx add <path>` exactly — both forms
+	// flow through the same code after name resolution.
 	t.Run("name_in_vault_installed", func(t *testing.T) {
 		env := NewTestEnv(t)
 		env.SetupPathVault()
@@ -106,17 +111,15 @@ func TestAddAlreadyInstalled(t *testing.T) {
 
 		output, _ := execAdd("my-skill", "--yes")
 
-		// Positive: configure-existing path was taken.
 		assertOutput(t, output,
-			[]string{"Configuring scope for my-skill"},
+			[]string{"already exists in vault with identical contents", "Preserved existing scope for my-skill"},
 			[]string{"Not installed", "not yet installed"},
 		)
 	})
 
-	// Scenario 1b: vault storage exists, manifest cleared (the asset is in
-	// vault storage but findAssetsByName won't see it). This reproduces the
-	// path-vault corner of the user's bug: the fix must consult the tracker
-	// when the manifest doesn't know about the asset.
+	// Scenario 1b: vault storage exists, manifest cleared. Name resolves to
+	// the on-disk dir; source-import re-imports against the (intact) storage
+	// and recognizes identical contents.
 	t.Run("name_in_vault_storage_but_not_in_manifest", func(t *testing.T) {
 		env := NewTestEnv(t)
 		vaultDir := env.SetupPathVault()
@@ -129,10 +132,8 @@ func TestAddAlreadyInstalled(t *testing.T) {
 
 		output, _ := execAdd("team-skill", "--yes")
 
-		// Positive: handleNewAssetFromVault reported installed status
-		// using the tracker fallback (the fix in add_config.go).
 		assertOutput(t, output,
-			[]string{"Found asset: team-skill", "(installed)"},
+			[]string{"already exists in vault with identical contents", "Preserved existing scope for team-skill"},
 			[]string{"(not yet installed)", "Not installed"},
 		)
 	})
@@ -180,31 +181,48 @@ func TestAddAlreadyInstalled(t *testing.T) {
 	})
 
 	// Scenario 4: `sx add <name>` — asset NOT in vault but IS installed
-	// (stale tracker). Expected: hard error rather than a fresh-install pitch,
-	// since `sx add` by-name with no vault entry has nothing meaningful to do.
-	t.Run("name_not_in_vault_but_installed_stale", func(t *testing.T) {
+	// (stale tracker, vault storage wiped). The name resolver finds the
+	// on-disk copy via the tracker, so source-import runs and re-adds the
+	// asset to the vault. This is the lost-and-found recovery path:
+	// pointing `sx add` at a known name should reconstitute vault state
+	// from a still-installed copy.
+	t.Run("name_not_in_vault_but_installed_recovers", func(t *testing.T) {
 		env := NewTestEnv(t)
 		vaultDir := env.SetupPathVault()
 
 		addAndInstall(t, env, "stale-skill")
 		env.AssertFileExists(filepath.Join(env.GlobalClaudeDir(), "skills", "stale-skill"))
 
-		// Wipe both manifest AND vault storage to simulate a fully stale tracker.
 		env.ResetVaultAssets(vaultDir)
 		if err := os.RemoveAll(filepath.Join(vaultDir, "assets", "stale-skill")); err != nil {
 			t.Fatalf("remove vault storage: %v", err)
 		}
 
-		_, err := execAdd("stale-skill", "--yes")
-		if err == nil {
-			t.Fatal("expected error when asset is not in vault, got nil")
+		if _, err := execAdd("stale-skill", "--yes"); err != nil {
+			t.Fatalf("recovery add: %v", err)
+		}
+
+		lf, ok := env.ReadVaultAssets(vaultDir)
+		if !ok {
+			t.Fatal("vault manifest missing")
+		}
+		found := false
+		for _, a := range lf.Assets {
+			if a.Name == "stale-skill" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("stale-skill should have been re-added to the vault from its installed copy")
 		}
 	})
 
 	// Scenario 5: `sx add <path-to-installed-dir>` — asset in vault AND installed.
-	// Expected: routeSpecializedInput should detect the path's basename matches
-	// a tracker entry and route through configureExistingAsset — not through
-	// the zip-import flow.
+	// Expected: source-import flow runs, detects identical contents to the
+	// existing vault version, and preserves the existing scope rather than
+	// creating a new version. (The earlier band-aid that bypassed source-import
+	// entirely broke the re-edit workflow — see scenario 5c.)
 	t.Run("path_to_installed_dir_in_vault_installed", func(t *testing.T) {
 		env := NewTestEnv(t)
 		env.SetupPathVault()
@@ -216,14 +234,14 @@ func TestAddAlreadyInstalled(t *testing.T) {
 		output, _ := execAdd(installedDir, "--yes")
 
 		assertOutput(t, output,
-			[]string{"Configuring scope for path-skill"},
-			[]string{"Not installed", "not yet installed", "Creating zip"},
+			[]string{"already exists in vault with identical contents", "Preserved existing scope for path-skill"},
+			[]string{"Not installed", "not yet installed"},
 		)
 	})
 
-	// Scenario 5b: same as 5 but manifest cleared after install. Hits the
-	// tracker fallback in handleNewAssetFromVault when configureExistingAsset
-	// can't find the asset in the lock file.
+	// Scenario 5b: same as 5 but manifest cleared after install. Source-import
+	// still finds the asset (vault storage intact) and recognizes identical
+	// contents, so it preserves scope as in 5.
 	t.Run("path_to_installed_dir_storage_but_not_in_manifest", func(t *testing.T) {
 		env := NewTestEnv(t)
 		vaultDir := env.SetupPathVault()
@@ -236,13 +254,115 @@ func TestAddAlreadyInstalled(t *testing.T) {
 
 		output, _ := execAdd(installedDir, "--yes")
 
-		// The path-add routing detected an installed asset and handed off
-		// to the configure flow, which fell through to handleNewAssetFromVault
-		// (manifest cleared) — that must still report "(installed)".
 		assertOutput(t, output,
-			[]string{"Found asset: path-team-skill", "(installed)"},
-			[]string{"(not yet installed)", "Not installed", "Creating zip", "Successfully added"},
+			[]string{"already exists in vault with identical contents", "Preserved existing scope for path-team-skill"},
+			[]string{"(not yet installed)", "Not installed"},
 		)
+	})
+
+	// Scenario 5c: `sx add <path-to-installed-dir>` after the user edited the
+	// files in place. Source-import must upload a NEW version of the asset
+	// rather than silently treating the path as a scope-config no-op (which
+	// was the regression in the first attempted fix).
+	t.Run("path_to_installed_dir_with_local_edits_uploads_new_version", func(t *testing.T) {
+		env := NewTestEnv(t)
+		vaultDir := env.SetupPathVault()
+
+		addAndInstall(t, env, "editable-skill")
+		installedDir := filepath.Join(env.GlobalClaudeDir(), "skills", "editable-skill")
+		env.AssertFileExists(installedDir)
+
+		// User edits the installed file in place.
+		env.WriteFile(filepath.Join(installedDir, "SKILL.md"), "You are editable-skill v2 (edited)")
+
+		if _, err := execAdd(installedDir, "--yes"); err != nil {
+			t.Fatalf("add edited: %v", err)
+		}
+
+		// Vault must hold two versions of editable-skill.
+		lf, ok := env.ReadVaultAssets(vaultDir)
+		if !ok {
+			t.Fatal("vault manifest missing")
+		}
+		count := 0
+		for _, a := range lf.Assets {
+			if a.Name == "editable-skill" {
+				count++
+			}
+		}
+		if count < 2 {
+			t.Errorf("expected at least 2 versions of editable-skill in vault, got %d", count)
+		}
+	})
+
+	// Scenario 5d: name-form equivalent of 5c. `sx add <name>` must resolve
+	// to the installed on-disk directory and upload a new version when the
+	// user edited files in place. This is the scenario that motivated
+	// resolveInstalledAssetPath — without it, `sx add <name>` silently no-ops
+	// on local edits while `sx add <path>` would upload them.
+	t.Run("name_with_local_edits_uploads_new_version", func(t *testing.T) {
+		env := NewTestEnv(t)
+		vaultDir := env.SetupPathVault()
+
+		addAndInstall(t, env, "named-editable")
+		installedDir := filepath.Join(env.GlobalClaudeDir(), "skills", "named-editable")
+		env.AssertFileExists(installedDir)
+
+		env.WriteFile(filepath.Join(installedDir, "SKILL.md"), "You are named-editable v2 (edited in place)")
+
+		if _, err := execAdd("named-editable", "--yes"); err != nil {
+			t.Fatalf("add by name after edit: %v", err)
+		}
+
+		lf, ok := env.ReadVaultAssets(vaultDir)
+		if !ok {
+			t.Fatal("vault manifest missing")
+		}
+		count := 0
+		for _, a := range lf.Assets {
+			if a.Name == "named-editable" {
+				count++
+			}
+		}
+		if count < 2 {
+			t.Errorf("expected at least 2 versions after edit-then-add-by-name, got %d", count)
+		}
+	})
+
+	// Scenario 5e: after a new-version upload, the scope data feeding the
+	// interactive prompt must still reflect the existing installation —
+	// not "Not installed". `--yes` mode bypasses the prompt itself, so we
+	// assert against resolveCurrentScopes directly: this is the exact data
+	// that displayCurrentInstallation would render, and the bug the user
+	// reported (`✓ Successfully added check-sx@3` followed by "Not installed
+	// (available in vault only)") is precisely a regression where this
+	// helper returns nil when it shouldn't.
+	t.Run("new_version_upload_preserves_install_state_for_prompt", func(t *testing.T) {
+		env := NewTestEnv(t)
+		env.SetupPathVault()
+
+		addAndInstall(t, env, "scope-survives")
+		installedDir := filepath.Join(env.GlobalClaudeDir(), "skills", "scope-survives")
+		env.WriteFile(filepath.Join(installedDir, "SKILL.md"), "edited content")
+
+		if _, err := execAdd(installedDir, "--yes"); err != nil {
+			t.Fatalf("upload new version: %v", err)
+		}
+
+		// Now ask the helper what the scope prompt would see.
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("config load: %v", err)
+		}
+		vault, err := vaultpkg.NewFromConfig(cfg)
+		if err != nil {
+			t.Fatalf("open vault: %v", err)
+		}
+		got := resolveCurrentScopes(vault, "scope-survives")
+		if got == nil {
+			t.Fatal("resolveCurrentScopes returned nil after a new-version upload — " +
+				"this is the exact 'Not installed' regression we were tracking")
+		}
 	})
 
 	// Scenario 6: `sx add <path-to-installed-dir>` — asset in vault but tracker
