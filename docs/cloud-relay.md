@@ -1,7 +1,7 @@
 # Cloud relay (claude.ai and chatgpt.com)
 
 Most AI clients sx supports — Claude Code, Cursor, Codex, Copilot,
-Gemini, Kiro, Cline — are file-based: sx writes assets to a directory
+Gemini, Kiro, Cline, OpenCode — are file-based: sx writes assets to a directory
 the client reads on startup. Web clients like **claude.ai** and
 **chatgpt.com** can't read your filesystem, so sx exposes the same vault
 through a relay hosted at skills.new.

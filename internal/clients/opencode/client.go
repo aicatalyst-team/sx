@@ -37,18 +37,18 @@ func NewClient() *Client {
 	}
 }
 
-// IsInstalled checks for the opencode CLI or ~/.config/opencode/.
+// IsInstalled checks for ~/.config/opencode/ or the opencode CLI.
+// The config-dir check is preferred because `opencode` is a generic
+// binary name; the config dir is a stronger signal of an actual install.
 func (c *Client) IsInstalled() bool {
-	if _, err := exec.LookPath("opencode"); err == nil {
-		return true
+	if home, err := os.UserHomeDir(); err == nil {
+		configDir := filepath.Join(home, handlers.GlobalConfigDir)
+		if stat, err := os.Stat(configDir); err == nil && stat.IsDir() {
+			return true
+		}
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return false
-	}
-	configDir := filepath.Join(home, handlers.GlobalConfigDir)
-	if stat, err := os.Stat(configDir); err == nil && stat.IsDir() {
+	if _, err := exec.LookPath("opencode"); err == nil {
 		return true
 	}
 	return false

@@ -218,6 +218,89 @@ func TestOpenCodeMCPHandler_RemoveNoConfig(t *testing.T) {
 	}
 }
 
+func TestOpenCodeMCPHandler_RemoteInstall_DropsEnv(t *testing.T) {
+	targetBase := t.TempDir()
+
+	meta := &metadata.Metadata{
+		Asset: metadata.Asset{
+			Name:    "remote-mcp",
+			Version: "1.0.0",
+			Type:    asset.TypeMCP,
+		},
+		MCP: &metadata.MCPConfig{
+			Transport: "sse",
+			URL:       "https://example.com/mcp/sse",
+			Env:       map[string]string{"TOKEN": "unsupported-on-remote"},
+		},
+	}
+
+	zipData := createTestZip(t, map[string]string{
+		"metadata.toml": `[asset]
+name = "remote-mcp"
+version = "1.0.0"
+type = "mcp"
+
+[mcp]
+transport = "sse"
+url = "https://example.com/mcp/sse"
+`,
+	})
+
+	h := NewMCPHandler(meta)
+	if err := h.Install(context.Background(), zipData, targetBase); err != nil {
+		t.Fatalf("Install failed: %v", err)
+	}
+
+	cfg := readJSON(t, filepath.Join(targetBase, ConfigFile))
+	server := cfg["mcp"].(map[string]any)["remote-mcp"].(map[string]any)
+
+	// OpenCode's remote MCP schema has no `environment` field. sx must
+	// not emit it, even when the metadata carries env vars — there is
+	// nowhere to put them on a remote entry.
+	if _, hasEnv := server["environment"]; hasEnv {
+		t.Errorf("remote MCP should not write environment field, got: %v", server["environment"])
+	}
+}
+
+func TestOpenCodeMCPHandler_RemoveLastMCP(t *testing.T) {
+	targetBase := t.TempDir()
+	configPath := filepath.Join(targetBase, ConfigFile)
+
+	initial := `{
+  "$schema": "https://opencode.ai/config.json",
+  "theme": "tokyonight",
+  "mcp": {
+    "only": {"type": "local", "enabled": true, "command": ["foo"]}
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(initial), 0644); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	meta := &metadata.Metadata{
+		Asset: metadata.Asset{Name: "only", Version: "1.0.0", Type: asset.TypeMCP},
+		MCP:   &metadata.MCPConfig{Command: "foo"},
+	}
+	h := NewMCPHandler(meta)
+	if err := h.Remove(context.Background(), targetBase); err != nil {
+		t.Fatalf("Remove failed: %v", err)
+	}
+
+	cfg := readJSON(t, configPath)
+	// Unrelated user fields must survive.
+	if cfg["theme"] != "tokyonight" {
+		t.Errorf("theme was clobbered when removing last MCP: %v", cfg["theme"])
+	}
+	// The mcp map can either be absent or empty; sx writes it as absent
+	// when no entries remain. Either is acceptable to OpenCode; pin the
+	// current behavior so a future change to it is intentional.
+	if mcp, ok := cfg["mcp"]; ok {
+		if m, isMap := mcp.(map[string]any); !isMap || len(m) != 0 {
+			t.Errorf("mcp should be absent or empty after removing last entry, got: %#v", mcp)
+		}
+	}
+}
+
 func TestOpenCodeMCPHandler_Remove(t *testing.T) {
 	targetBase := t.TempDir()
 	configPath := filepath.Join(targetBase, ConfigFile)

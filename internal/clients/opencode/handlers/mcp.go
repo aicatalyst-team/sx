@@ -62,7 +62,9 @@ func (h *MCPHandler) Remove(ctx context.Context, targetBase string) error {
 	}
 
 	serverDir := filepath.Join(targetBase, DirMCPServers, h.metadata.Asset.Name)
-	os.RemoveAll(serverDir)
+	// Best-effort cleanup of extracted files: the MCP entry is already
+	// out of opencode.json, so a stale dir is cosmetic, not functional.
+	_ = os.RemoveAll(serverDir)
 
 	return nil
 }
@@ -112,15 +114,15 @@ func (h *MCPHandler) generateConfigOnlyMCPEntry() map[string]any {
 	mcpConfig := h.metadata.MCP
 
 	if mcpConfig.IsRemote() {
-		entry := map[string]any{
+		// OpenCode's remote MCP shape only carries `url` and `headers`; it
+		// has no `environment` field. sx's metadata only exposes Env, which
+		// has no analogue here, so any env vars set on a remote MCP are
+		// dropped rather than silently written into an unrecognized field.
+		return map[string]any{
 			"type":    "remote",
 			"enabled": true,
 			"url":     mcpConfig.URL,
 		}
-		if len(mcpConfig.Env) > 0 {
-			entry["environment"] = mcpConfig.Env
-		}
-		return entry
 	}
 
 	// Build single command array: [command, ...args]
