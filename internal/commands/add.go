@@ -17,8 +17,38 @@ import (
 	"github.com/sleuth-io/sx/internal/metadata"
 	"github.com/sleuth-io/sx/internal/ui"
 	"github.com/sleuth-io/sx/internal/ui/components"
+	"github.com/sleuth-io/sx/internal/ui/theme"
 	vaultpkg "github.com/sleuth-io/sx/internal/vault"
 )
+
+func addLongHelp() string {
+	s := theme.Current().Styles()
+	e := s.Emphasis.Render
+	m := s.Muted.Render
+
+	return `Add an asset from a local zip file, directory, URL, GitHub path, skills.sh, or marketplace.
+If the argument is an existing asset name, configure its installation scope instead.
+
+` + s.Header.Render("Examples:") + `
+  ` + m("# Add from a local directory") + `
+  ` + e("sx add ./my-skill") + `
+
+  ` + m("# Add from skills.sh") + `
+  ` + e("sx add anthropics/skills/frontend-design") + `
+  ` + e("sx add vercel-labs/agent-skills") + `
+  ` + e("sx add --browse") + `
+
+  ` + m("# Configure scope for an existing asset") + `
+  ` + e("sx add my-skill") + `
+
+  ` + m("# Non-interactive with scope options") + `
+  ` + e("sx add ./my-skill --yes") + `
+  ` + e("sx add ./my-skill --yes --scope-repo git@github.com:org/repo.git") + `
+  ` + e("sx add ./my-skill --yes --scope personal") + `
+
+  ` + m("# Add to vault only, skip install") + `
+  ` + e("sx add ./my-skill -y --no-install")
+}
 
 // NewAddCommand creates the add command
 func NewAddCommand() *cobra.Command {
@@ -37,20 +67,8 @@ func NewAddCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add [source-or-asset-name]",
 		Short: "Add an asset or configure an existing one",
-		Long: `Add an asset from a local zip file, directory, URL, GitHub path, skills.sh, or marketplace.
-If the argument is an existing asset name, configure its installation scope instead.
-
-Examples:
-  sx add anthropics/skills/frontend-design   # Add a skill from skills.sh
-  sx add vercel-labs/agent-skills            # Browse skills in a skills.sh repo
-  sx add ./my-skill                          # Interactive mode
-  sx add --browse                            # Search and browse skills.sh
-  sx add ./my-skill --yes                    # Accept defaults, install globally
-  sx add ./my-skill -y --no-install          # Add to vault only
-  sx add ./my-skill --yes --scope-global
-  sx add ./my-skill --yes --scope-repo git@github.com:org/repo.git
-  sx add ./my-skill --yes --scope personal   # Install only for yourself (Sleuth only)`,
-		Args: cobra.MaximumNArgs(1),
+		Long:  addLongHelp(),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var input string
 			if len(args) > 0 {
@@ -172,6 +190,14 @@ func routeSpecializedInput(ctx context.Context, cmd *cobra.Command, out *outputH
 	// Existing asset name (not a file, directory, or URL)
 	if !isURL(input) && !github.IsTreeURL(input) {
 		if _, err := os.Stat(input); os.IsNotExist(err) {
+			// If the named asset is installed locally, treat the on-disk
+			// directory as the source. This keeps `sx add <name>` and
+			// `sx add <path-to-installed-dir>` behaviorally equivalent —
+			// either form picks up local edits and uploads a new version
+			// when the content differs from the latest in the vault.
+			if installedPath := resolveInstalledAssetPath(ctx, input); installedPath != "" {
+				return true, addFromZipSource(ctx, cmd, out, status, installedPath, opts)
+			}
 			return true, configureExistingAsset(ctx, cmd, out, status, input, opts)
 		}
 	}
@@ -436,7 +462,7 @@ func handleIdenticalAsset(ctx context.Context, out *outputHelper, status *compon
 			return err
 		}
 	} else {
-		currentScopes := existingAssetScopes(vault, name)
+		currentScopes := resolveCurrentScopes(vault, name)
 		result, err = promptForRepositories(out, name, version, currentScopes, vault)
 		if err != nil {
 			return fmt.Errorf("failed to configure repositories: %w", err)
@@ -535,7 +561,7 @@ func addNewAsset(ctx context.Context, out *outputHelper, status *components.Stat
 			return err
 		}
 	} else {
-		currentScopes := existingAssetScopes(vault, lockAsset.Name)
+		currentScopes := resolveCurrentScopes(vault, lockAsset.Name)
 		result, err = promptForRepositories(out, lockAsset.Name, lockAsset.Version, currentScopes, vault)
 		if err != nil {
 			return fmt.Errorf("failed to configure scopes: %w", err)
