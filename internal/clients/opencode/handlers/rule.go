@@ -46,11 +46,16 @@ func (h *RuleHandler) Install(ctx context.Context, zipData []byte, targetBase st
 
 	content, err := utils.ReadZipFile(zipData, promptFile)
 	if err != nil {
-		// Fall back to lowercase rule.md for compatibility with packagers
-		// that don't follow the uppercase convention.
+		// An explicitly configured prompt-file should surface its own
+		// filename in the error. The lowercase rule.md fallback only
+		// applies when we're using the default RULE.md, where packagers
+		// commonly ship a lowercase variant.
+		if promptFile != DefaultRulePromptFile {
+			return fmt.Errorf("failed to read prompt file %q: %w", promptFile, err)
+		}
 		content, err = utils.ReadZipFile(zipData, "rule.md")
 		if err != nil {
-			return fmt.Errorf("failed to read prompt file: %w", err)
+			return fmt.Errorf("failed to read prompt file (tried %s and rule.md): %w", DefaultRulePromptFile, err)
 		}
 	}
 

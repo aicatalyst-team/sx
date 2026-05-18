@@ -1,12 +1,13 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/sleuth-io/sx/internal/asset"
 	"github.com/sleuth-io/sx/internal/bootstrap"
@@ -14,6 +15,18 @@ import (
 	"github.com/sleuth-io/sx/internal/metadata"
 	"github.com/sleuth-io/sx/internal/utils"
 )
+
+// commandArray builds the [command, ...args] form OpenCode expects under
+// the `command` key of a local MCP entry. Centralized so packaged,
+// config-only, and bootstrap MCP entries always emit the same shape.
+func commandArray(command string, args []string) []any {
+	arr := make([]any, 0, 1+len(args))
+	arr = append(arr, command)
+	for _, a := range args {
+		arr = append(arr, a)
+	}
+	return arr
+}
 
 var mcpOps = dirasset.NewOperations(DirMCPServers, &asset.TypeMCP)
 
@@ -91,16 +104,13 @@ func (h *MCPHandler) VerifyInstalled(targetBase string) (bool, string) {
 func (h *MCPHandler) generatePackagedMCPEntry(serverDir string) map[string]any {
 	mcpConfig := h.metadata.MCP
 
-	command, args := utils.ResolveCommandAndArgs(mcpConfig.Command, mcpConfig.Args, serverDir)
-
-	// OpenCode local servers take a single command array combining the
-	// executable and its arguments.
-	commandArr := append([]any{command}, args...)
+	command := utils.ResolveCommand(mcpConfig.Command, serverDir)
+	args := utils.ResolveArgs(mcpConfig.Args, serverDir)
 
 	entry := map[string]any{
 		"type":    "local",
 		"enabled": true,
-		"command": commandArr,
+		"command": commandArray(command, args),
 	}
 
 	if len(mcpConfig.Env) > 0 {
@@ -125,16 +135,10 @@ func (h *MCPHandler) generateConfigOnlyMCPEntry() map[string]any {
 		}
 	}
 
-	// Build single command array: [command, ...args]
-	commandArr := []any{mcpConfig.Command}
-	for _, a := range mcpConfig.Args {
-		commandArr = append(commandArr, a)
-	}
-
 	entry := map[string]any{
 		"type":    "local",
 		"enabled": true,
-		"command": commandArr,
+		"command": commandArray(mcpConfig.Command, mcpConfig.Args),
 	}
 
 	if len(mcpConfig.Env) > 0 {
@@ -198,34 +202,70 @@ func ReadOpenCodeConfig(path string) (*OpenCodeConfig, error) {
 }
 
 // WriteOpenCodeConfig writes opencode.json, preserving unknown fields and
-// adding the $schema reference if it isn't already present.
+// adding the $schema reference if it isn't already present. Top-level keys
+// are written in a stable order — $schema first, then instructions, then
+// mcp, then any remaining preserved keys sorted alphabetically — so
+// repeated installs/uninstalls don't churn the file's git diff.
 func WriteOpenCodeConfig(path string, config *OpenCodeConfig) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 
-	output := make(map[string]any)
-	maps.Copy(output, config.Other)
-
-	if _, hasSchema := output["$schema"]; !hasSchema {
-		output["$schema"] = "https://opencode.ai/config.json"
+	type kv struct {
+		key string
+		val any
 	}
+	var pairs []kv
 
-	if len(config.MCP) > 0 {
-		output["mcp"] = config.MCP
+	schema, hasSchema := config.Other["$schema"]
+	if !hasSchema {
+		schema = "https://opencode.ai/config.json"
 	}
+	pairs = append(pairs, kv{"$schema", schema})
 
 	if len(config.Instructions) > 0 {
-		output["instructions"] = config.Instructions
+		pairs = append(pairs, kv{"instructions", config.Instructions})
+	}
+	if len(config.MCP) > 0 {
+		pairs = append(pairs, kv{"mcp", config.MCP})
 	}
 
-	data, err := json.MarshalIndent(output, "", "  ")
-	if err != nil {
-		return err
+	otherKeys := make([]string, 0, len(config.Other))
+	for k := range config.Other {
+		if k == "$schema" {
+			continue
+		}
+		otherKeys = append(otherKeys, k)
+	}
+	sort.Strings(otherKeys)
+	for _, k := range otherKeys {
+		pairs = append(pairs, kv{k, config.Other[k]})
 	}
 
-	return os.WriteFile(path, data, 0644)
+	var buf bytes.Buffer
+	buf.WriteString("{\n")
+	for i, p := range pairs {
+		keyBytes, err := json.Marshal(p.key)
+		if err != nil {
+			return err
+		}
+		valBytes, err := json.MarshalIndent(p.val, "  ", "  ")
+		if err != nil {
+			return err
+		}
+		buf.WriteString("  ")
+		buf.Write(keyBytes)
+		buf.WriteString(": ")
+		buf.Write(valBytes)
+		if i < len(pairs)-1 {
+			buf.WriteByte(',')
+		}
+		buf.WriteByte('\n')
+	}
+	buf.WriteString("}")
+
+	return os.WriteFile(path, buf.Bytes(), 0644)
 }
 
 // AddMCPServer adds or updates an entry in opencode.json under the mcp key.
@@ -250,15 +290,10 @@ func AddMCPServer(configPath, name string, entry map[string]any) error {
 // JSON shape OpenCode expects under the `mcp.<name>` key. Bootstrap MCPs are
 // always local processes (bootstrap doesn't model remote URLs).
 func MCPServerEntryFromBootstrap(cfg *bootstrap.MCPServerConfig) map[string]any {
-	commandArr := make([]any, 0, 1+len(cfg.Args))
-	commandArr = append(commandArr, cfg.Command)
-	for _, a := range cfg.Args {
-		commandArr = append(commandArr, a)
-	}
 	entry := map[string]any{
 		"type":    "local",
 		"enabled": true,
-		"command": commandArr,
+		"command": commandArray(cfg.Command, cfg.Args),
 	}
 	if len(cfg.Env) > 0 {
 		entry["environment"] = cfg.Env

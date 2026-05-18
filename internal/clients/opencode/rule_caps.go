@@ -11,10 +11,12 @@ import (
 )
 
 // RuleCapabilities returns the rule capabilities for OpenCode. OpenCode
-// reads project rules from `AGENTS.md` (with `CLAUDE.md` as a migration
-// fallback) and any additional files listed in the `instructions` array
-// of opencode.json. sx installs rules into a `<config>/rules/` directory
-// and registers each rule path under `instructions`.
+// reads project rules from `AGENTS.md` and any additional files listed in
+// the `instructions` array of opencode.json. (OpenCode also reads
+// `CLAUDE.md` for backwards-compat, but that file is claimed by the
+// Claude Code rule caps to avoid duplicate detection.) sx installs rules
+// into a `<config>/rules/` directory and registers each rule path under
+// `instructions`.
 func RuleCapabilities() *clients.RuleCapabilities {
 	return &clients.RuleCapabilities{
 		ClientName:       "opencode",
