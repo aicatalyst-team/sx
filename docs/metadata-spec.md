@@ -90,8 +90,8 @@ clients = ["claude-code", "cursor"]
 ```
 
 Valid client IDs: `claude-code`, `cline`, `codex`, `cursor`, `gemini`,
-`github-copilot`, `kiro`, `openclaw`. Unknown IDs are rejected at
-`sx add` / publish time.
+`github-copilot`, `kiro`, `openclaw`, `opencode`. Unknown IDs are rejected
+at `sx add` / publish time.
 
 ## Asset Types
 
