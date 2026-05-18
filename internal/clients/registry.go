@@ -3,11 +3,24 @@ package clients
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/sleuth-io/sx/internal/asset"
 )
+
+// sortClientsByID returns the clients sorted by their ID. Used at every
+// registry exit point so callers see a stable order — map iteration is
+// randomized, and the install tracker / resolveInstalledAssetPath both
+// rely on entry.Clients order being deterministic (otherwise `sx add
+// <name>` would resolve to a different installed copy each run).
+func sortClientsByID(clients []Client) []Client {
+	sort.Slice(clients, func(i, j int) bool {
+		return clients[i].ID() < clients[j].ID()
+	})
+	return clients
+}
 
 // Registry holds all registered clients
 type Registry struct {
@@ -43,7 +56,8 @@ func (r *Registry) Get(id string) (Client, error) {
 	return client, nil
 }
 
-// DetectInstalled returns all clients detected as installed
+// DetectInstalled returns all clients detected as installed, in stable
+// ID order.
 func (r *Registry) DetectInstalled() []Client {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -54,10 +68,10 @@ func (r *Registry) DetectInstalled() []Client {
 			installed = append(installed, client)
 		}
 	}
-	return installed
+	return sortClientsByID(installed)
 }
 
-// GetAll returns all registered clients
+// GetAll returns all registered clients in stable ID order.
 func (r *Registry) GetAll() []Client {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -66,10 +80,11 @@ func (r *Registry) GetAll() []Client {
 	for _, client := range r.clients {
 		clients = append(clients, client)
 	}
-	return clients
+	return sortClientsByID(clients)
 }
 
-// FilterByAssetType returns clients that support the given asset type
+// FilterByAssetType returns clients that support the given asset type, in
+// stable ID order.
 func (r *Registry) FilterByAssetType(assetType asset.Type) []Client {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -80,7 +95,7 @@ func (r *Registry) FilterByAssetType(assetType asset.Type) []Client {
 			supported = append(supported, client)
 		}
 	}
-	return supported
+	return sortClientsByID(supported)
 }
 
 // Global returns the global registry
