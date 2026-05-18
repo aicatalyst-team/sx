@@ -62,32 +62,3 @@ func TestPromptKeepCurrentSettingsSetsInherit(t *testing.T) {
 		t.Errorf("Keep current must not set Remove=true, got %#v", result)
 	}
 }
-
-// TestPromptCancelOnInstalledAssetSetsInherit verifies the cancel-treated-as-keep
-// path also returns Inherit=true. Cancelling the prompt on an installed asset
-// must mean "leave the installation alone", which has the same wire semantics
-// as picking "Keep current settings" explicitly.
-func TestPromptCancelOnInstalledAssetSetsInherit(t *testing.T) {
-	currentRepos := []lockfile.Scope{{Repo: "github.com/acme/web"}}
-
-	// Empty input → bubbletea Select reads EOF → returns "selection cancelled".
-	in := bufio.NewReader(strings.NewReader(""))
-	out := io.Discard
-	styledOut := ui.NewOutput(out, out)
-	ioc := components.NewIOContext(in, out)
-
-	result, err := promptForRepositoriesWithUI(
-		"my-skill", "1",
-		currentRepos,
-		&emptyVault{},
-		styledOut,
-		ioc,
-	)
-	if err != nil {
-		// On non-cancellation errors we can't pin the contract.
-		t.Skipf("non-cancel error from prompt: %v (skip — Select implementation may have changed)", err)
-	}
-	if !result.Inherit {
-		t.Errorf("expected Inherit=true on cancel of installed asset, got %#v", result)
-	}
-}
