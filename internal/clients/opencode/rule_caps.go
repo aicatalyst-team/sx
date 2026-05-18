@@ -32,6 +32,12 @@ func RuleCapabilities() *clients.RuleCapabilities {
 }
 
 func matchesPath(path string) bool {
+	// The rules-directory check is case-insensitive because the asset
+	// name (and thus the filename) is user-supplied and might be mixed
+	// case. The AGENTS.md check is intentionally exact-case: AGENTS.md
+	// is the canonical filename in OpenCode's docs, so a stray
+	// lowercase agents.md is more likely a different file than the
+	// project's rules file and shouldn't be claimed here.
 	lower := strings.ToLower(path)
 	return (strings.Contains(lower, ".opencode/rules/") && strings.HasSuffix(lower, ".md")) ||
 		strings.HasSuffix(path, "/AGENTS.md") || path == "AGENTS.md"

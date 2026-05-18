@@ -282,7 +282,7 @@ func (c *Client) GetBootstrapPath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, handlers.GlobalConfigDir, handlers.ConfigFile)
+	return handlers.ConfigFilePath(filepath.Join(home, handlers.GlobalConfigDir))
 }
 
 // InstallBootstrap installs MCP servers declared in the supplied options.
@@ -291,7 +291,7 @@ func (c *Client) InstallBootstrap(_ context.Context, opts []bootstrap.Option) er
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
-	configPath := filepath.Join(home, handlers.GlobalConfigDir, handlers.ConfigFile)
+	configPath := handlers.ConfigFilePath(filepath.Join(home, handlers.GlobalConfigDir))
 
 	for _, opt := range opts {
 		if opt.MCPConfig == nil {
@@ -311,7 +311,7 @@ func (c *Client) UninstallBootstrap(_ context.Context, opts []bootstrap.Option) 
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
-	configPath := filepath.Join(home, handlers.GlobalConfigDir, handlers.ConfigFile)
+	configPath := handlers.ConfigFilePath(filepath.Join(home, handlers.GlobalConfigDir))
 
 	for _, opt := range opts {
 		if opt.MCPConfig == nil {

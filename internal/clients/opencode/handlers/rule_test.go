@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/sleuth-io/sx/internal/asset"
@@ -156,6 +157,45 @@ func TestOpenCodeRuleHandler_FallsBackToLowercaseRuleMd(t *testing.T) {
 	}
 }
 
+func TestOpenCodeRuleHandler_ExplicitPromptFileMissingSurfacesName(t *testing.T) {
+	targetBase := t.TempDir()
+
+	meta := &metadata.Metadata{
+		Asset: metadata.Asset{
+			Name:    "policy",
+			Version: "1.0.0",
+			Type:    asset.TypeRule,
+		},
+		// Explicitly configured prompt-file. The lowercase rule.md
+		// fallback only applies when the configured file is the default
+		// RULE.md — for an explicit filename the install must surface
+		// the configured name in the error so asset authors can find
+		// the missing file in their package.
+		Rule: &metadata.RuleConfig{PromptFile: "policy.md"},
+	}
+
+	zipData := createTestZip(t, map[string]string{
+		"metadata.toml": `[asset]
+name = "policy"
+version = "1.0.0"
+type = "rule"
+
+[rule]
+prompt-file = "policy.md"
+`,
+		"rule.md": "ignored fallback content",
+	})
+
+	h := NewRuleHandler(meta, "rules/policy.md")
+	err := h.Install(context.Background(), zipData, targetBase)
+	if err == nil {
+		t.Fatal("Install should fail when explicit prompt-file is missing")
+	}
+	if !strings.Contains(err.Error(), "policy.md") {
+		t.Errorf("error should mention the configured filename %q, got: %v", "policy.md", err)
+	}
+}
+
 func TestAddInstruction_DeduplicatesEntries(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "opencode.json")
@@ -199,5 +239,115 @@ func TestAddInstruction_PreservesUnknownFields(t *testing.T) {
 	}
 	if raw["model"] != "anthropic/claude-sonnet-4-6" {
 		t.Errorf("model should be preserved, got %v", raw["model"])
+	}
+}
+
+// TestAddInstruction_DuplicateIsByteForByteNoop pins the polite-write
+// behavior: an AddInstruction call for a path already in the file must
+// not touch the file (no mtime change, no key-order normalization, no
+// $schema injection). This prevents a stray no-op install from
+// producing a churn-only git diff in the user's checked-in config.
+func TestAddInstruction_DuplicateIsByteForByteNoop(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "opencode.json")
+
+	// Hand-formatted config with non-alphabetical key order and no
+	// $schema: if AddInstruction re-writes the file on a no-op, both
+	// would change.
+	original := `{
+  "theme": "tokyonight",
+  "instructions": [
+    "rules/already-here.md"
+  ]
+}`
+	if err := os.WriteFile(configPath, []byte(original), 0644); err != nil {
+		t.Fatalf("seed write failed: %v", err)
+	}
+
+	if err := AddInstruction(configPath, "rules/already-here.md"); err != nil {
+		t.Fatalf("AddInstruction failed: %v", err)
+	}
+
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(got) != original {
+		t.Errorf("AddInstruction on duplicate should leave file untouched.\nwant:\n%s\n got:\n%s", original, string(got))
+	}
+}
+
+// TestRemoveInstruction_MissingIsByteForByteNoop mirrors the Add case:
+// removing an unregistered instruction must leave the file untouched.
+func TestRemoveInstruction_MissingIsByteForByteNoop(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "opencode.json")
+
+	original := `{
+  "theme": "tokyonight",
+  "instructions": [
+    "rules/other.md"
+  ]
+}`
+	if err := os.WriteFile(configPath, []byte(original), 0644); err != nil {
+		t.Fatalf("seed write failed: %v", err)
+	}
+
+	if err := RemoveInstruction(configPath, "rules/never-installed.md"); err != nil {
+		t.Fatalf("RemoveInstruction failed: %v", err)
+	}
+
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(got) != original {
+		t.Errorf("RemoveInstruction on missing entry should leave file untouched.\nwant:\n%s\n got:\n%s", original, string(got))
+	}
+}
+
+// TestConfigFilePath_PrefersJsoncWhenOnlyJsoncExists verifies sx writes
+// back to the user's existing opencode.jsonc rather than materializing a
+// separate opencode.json next to it.
+func TestConfigFilePath_PrefersJsoncWhenOnlyJsoncExists(t *testing.T) {
+	dir := t.TempDir()
+	jsoncPath := filepath.Join(dir, ConfigFileJSONC)
+	if err := os.WriteFile(jsoncPath, []byte("{}"), 0644); err != nil {
+		t.Fatalf("seed jsonc failed: %v", err)
+	}
+
+	got := ConfigFilePath(dir)
+	if got != jsoncPath {
+		t.Errorf("ConfigFilePath should prefer existing .jsonc, got %s", got)
+	}
+}
+
+// TestConfigFilePath_PrefersJsonWhenBothExist documents the tie-break:
+// if both files exist, sx writes to .json. (Both existing is already a
+// broken setup; sx doesn't try to merge or repair it.)
+func TestConfigFilePath_PrefersJsonWhenBothExist(t *testing.T) {
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, ConfigFile)
+	jsoncPath := filepath.Join(dir, ConfigFileJSONC)
+	if err := os.WriteFile(jsonPath, []byte("{}"), 0644); err != nil {
+		t.Fatalf("seed json failed: %v", err)
+	}
+	if err := os.WriteFile(jsoncPath, []byte("{}"), 0644); err != nil {
+		t.Fatalf("seed jsonc failed: %v", err)
+	}
+
+	got := ConfigFilePath(dir)
+	if got != jsonPath {
+		t.Errorf("ConfigFilePath should prefer .json when both exist, got %s", got)
+	}
+}
+
+// TestConfigFilePath_DefaultsToJsonWhenNeitherExists pins the
+// new-install behavior — fresh targets get .json.
+func TestConfigFilePath_DefaultsToJsonWhenNeitherExists(t *testing.T) {
+	dir := t.TempDir()
+	got := ConfigFilePath(dir)
+	if got != filepath.Join(dir, ConfigFile) {
+		t.Errorf("ConfigFilePath should default to .json when neither exists, got %s", got)
 	}
 }

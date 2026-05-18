@@ -64,13 +64,13 @@ func (h *RuleHandler) Install(ctx context.Context, zipData []byte, targetBase st
 		return fmt.Errorf("failed to write rule file: %w", err)
 	}
 
-	configPath := filepath.Join(targetBase, ConfigFile)
+	configPath := ConfigFilePath(targetBase)
 	return AddInstruction(configPath, h.registerPath)
 }
 
 // Remove deletes the rule file and unregisters its instructions entry.
 func (h *RuleHandler) Remove(ctx context.Context, targetBase string) error {
-	configPath := filepath.Join(targetBase, ConfigFile)
+	configPath := ConfigFilePath(targetBase)
 	if err := RemoveInstruction(configPath, h.registerPath); err != nil {
 		return err
 	}
@@ -106,7 +106,9 @@ func (h *RuleHandler) getPromptFile() string {
 }
 
 // AddInstruction appends path to opencode.json's `instructions` array if
-// it isn't already present.
+// it isn't already present. If the path is already registered, the config
+// file is left untouched (no $schema injection, no key reordering) so
+// repeated no-op installs don't churn the user's file.
 func AddInstruction(configPath, path string) error {
 	if path == "" {
 		return errors.New("empty instruction path")
@@ -117,9 +119,10 @@ func AddInstruction(configPath, path string) error {
 		return fmt.Errorf("failed to read opencode.json: %w", err)
 	}
 
-	if !slices.Contains(config.Instructions, path) {
-		config.Instructions = append(config.Instructions, path)
+	if slices.Contains(config.Instructions, path) {
+		return nil
 	}
+	config.Instructions = append(config.Instructions, path)
 
 	if err := WriteOpenCodeConfig(configPath, config); err != nil {
 		return fmt.Errorf("failed to write opencode.json: %w", err)
@@ -128,7 +131,8 @@ func AddInstruction(configPath, path string) error {
 }
 
 // RemoveInstruction removes path from opencode.json's `instructions` array.
-// If the config file doesn't exist, this is a no-op.
+// If the config file doesn't exist or the path isn't registered, this is a
+// no-op and the file is left untouched.
 func RemoveInstruction(configPath, path string) error {
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		return nil
@@ -137,6 +141,10 @@ func RemoveInstruction(configPath, path string) error {
 	config, err := ReadOpenCodeConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to read opencode.json: %w", err)
+	}
+
+	if !slices.Contains(config.Instructions, path) {
+		return nil
 	}
 
 	filtered := config.Instructions[:0]

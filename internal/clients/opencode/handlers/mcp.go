@@ -62,14 +62,14 @@ func (h *MCPHandler) Install(ctx context.Context, zipData []byte, targetBase str
 		entry = h.generateConfigOnlyMCPEntry()
 	}
 
-	configPath := filepath.Join(targetBase, ConfigFile)
+	configPath := ConfigFilePath(targetBase)
 	return AddMCPServer(configPath, h.metadata.Asset.Name, entry)
 }
 
 // Remove removes the MCP entry from opencode.json and cleans up any extracted
 // packaged-server files.
 func (h *MCPHandler) Remove(ctx context.Context, targetBase string) error {
-	configPath := filepath.Join(targetBase, ConfigFile)
+	configPath := ConfigFilePath(targetBase)
 	if err := RemoveMCPServer(configPath, h.metadata.Asset.Name); err != nil {
 		return err
 	}
@@ -90,7 +90,7 @@ func (h *MCPHandler) VerifyInstalled(targetBase string) (bool, string) {
 		return mcpOps.VerifyInstalled(targetBase, h.metadata.Asset.Name, h.metadata.Asset.Version)
 	}
 
-	configPath := filepath.Join(targetBase, ConfigFile)
+	configPath := ConfigFilePath(targetBase)
 	config, err := ReadOpenCodeConfig(configPath)
 	if err != nil {
 		return false, "failed to read opencode.json: " + err.Error()
@@ -302,8 +302,9 @@ func MCPServerEntryFromBootstrap(cfg *bootstrap.MCPServerConfig) map[string]any 
 }
 
 // RemoveMCPServer removes the named entry from opencode.json. If the config
-// file doesn't exist, this is a no-op so we don't materialize a config when
-// there's nothing to remove.
+// file doesn't exist or the entry isn't there, this is a no-op and the file
+// is left untouched — so a stray uninstall doesn't materialize a config or
+// rewrite an existing one just to inject $schema / reorder keys.
 func RemoveMCPServer(configPath, name string) error {
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		return nil
@@ -314,6 +315,9 @@ func RemoveMCPServer(configPath, name string) error {
 		return fmt.Errorf("failed to read opencode.json: %w", err)
 	}
 
+	if _, ok := config.MCP[name]; !ok {
+		return nil
+	}
 	delete(config.MCP, name)
 
 	if err := WriteOpenCodeConfig(configPath, config); err != nil {
