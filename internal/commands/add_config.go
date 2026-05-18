@@ -105,7 +105,13 @@ func handleNewAssetFromVault(ctx context.Context, cmd *cobra.Command, out *outpu
 	}
 
 	latestVersion := versions[len(versions)-1]
-	out.printf("Found asset: %s v%s in vault (not yet installed)\n", assetName, latestVersion)
+
+	currentScopes := resolveCurrentScopes(vault, assetName)
+	if currentScopes != nil {
+		out.printf("Found asset: %s v%s in vault (installed)\n", assetName, latestVersion)
+	} else {
+		out.printf("Found asset: %s v%s in vault (not yet installed)\n", assetName, latestVersion)
+	}
 
 	// Get scopes (from flags if non-interactive, otherwise prompt)
 	var result *scopeResult
@@ -115,7 +121,7 @@ func handleNewAssetFromVault(ctx context.Context, cmd *cobra.Command, out *outpu
 			return err
 		}
 	} else {
-		result, err = promptForRepositories(out, assetName, latestVersion, nil, vault)
+		result, err = promptForRepositories(out, assetName, latestVersion, currentScopes, vault)
 		if err != nil {
 			return fmt.Errorf("failed to configure repositories: %w", err)
 		}
