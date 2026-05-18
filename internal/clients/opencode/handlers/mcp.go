@@ -160,7 +160,12 @@ type OpenCodeConfig struct {
 }
 
 // ReadOpenCodeConfig reads opencode.json (or returns an empty config if the
-// file doesn't exist yet). Supports JSONC.
+// file doesn't exist yet). Supports JSONC. If the file is present but the
+// top-level `mcp` or `instructions` keys carry the wrong JSON type (e.g.
+// a string where an object/array is expected), this returns a typed error
+// rather than silently dropping the value — otherwise the next
+// WriteOpenCodeConfig would clobber the user's data without warning. A
+// JSON null at either key is treated as absent (the JSON convention).
 func ReadOpenCodeConfig(path string) (*OpenCodeConfig, error) {
 	config := &OpenCodeConfig{
 		MCP:   make(map[string]any),
@@ -180,15 +185,25 @@ func ReadOpenCodeConfig(path string) (*OpenCodeConfig, error) {
 		return nil, err
 	}
 
-	if servers, ok := raw["mcp"].(map[string]any); ok {
+	if rawMCP, present := raw["mcp"]; present && rawMCP != nil {
+		servers, ok := rawMCP.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("opencode.json: `mcp` must be an object, got %T", rawMCP)
+		}
 		config.MCP = servers
 	}
 
-	if rawInstructions, ok := raw["instructions"].([]any); ok {
-		for _, v := range rawInstructions {
-			if s, ok := v.(string); ok {
-				config.Instructions = append(config.Instructions, s)
+	if rawInstructions, present := raw["instructions"]; present && rawInstructions != nil {
+		arr, ok := rawInstructions.([]any)
+		if !ok {
+			return nil, fmt.Errorf("opencode.json: `instructions` must be an array, got %T", rawInstructions)
+		}
+		for i, v := range arr {
+			s, ok := v.(string)
+			if !ok {
+				return nil, fmt.Errorf("opencode.json: `instructions[%d]` must be a string, got %T", i, v)
 			}
+			config.Instructions = append(config.Instructions, s)
 		}
 	}
 

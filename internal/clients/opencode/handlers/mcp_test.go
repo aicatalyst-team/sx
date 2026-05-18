@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sleuth-io/sx/internal/asset"
@@ -331,5 +332,85 @@ func TestOpenCodeMCPHandler_Remove(t *testing.T) {
 	}
 	if _, ok := mcp["keep"]; !ok {
 		t.Error("keep should still exist")
+	}
+}
+
+// TestReadOpenCodeConfig_RejectsMalformedMCPType prevents a regression
+// where a user's malformed `mcp` value (string instead of object) was
+// silently dropped by a failed type assertion, and the next write
+// overwrote it. Now we surface a typed error so callers can fail loudly.
+func TestReadOpenCodeConfig_RejectsMalformedMCPType(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "opencode.json")
+	if err := os.WriteFile(configPath, []byte(`{"mcp": "garbage"}`), 0644); err != nil {
+		t.Fatalf("seed write failed: %v", err)
+	}
+
+	_, err := ReadOpenCodeConfig(configPath)
+	if err == nil {
+		t.Fatal("expected error for malformed mcp value")
+	}
+	if !strings.Contains(err.Error(), "`mcp` must be an object") {
+		t.Errorf("error should explain the type mismatch, got: %v", err)
+	}
+}
+
+// TestReadOpenCodeConfig_RejectsMalformedInstructionsType mirrors the
+// mcp test for the `instructions` key.
+func TestReadOpenCodeConfig_RejectsMalformedInstructionsType(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "opencode.json")
+	if err := os.WriteFile(configPath, []byte(`{"instructions": "single-string"}`), 0644); err != nil {
+		t.Fatalf("seed write failed: %v", err)
+	}
+
+	_, err := ReadOpenCodeConfig(configPath)
+	if err == nil {
+		t.Fatal("expected error for malformed instructions value")
+	}
+	if !strings.Contains(err.Error(), "`instructions` must be an array") {
+		t.Errorf("error should explain the type mismatch, got: %v", err)
+	}
+}
+
+// TestReadOpenCodeConfig_RejectsNonStringInstructionEntry guards against
+// silently dropping non-string entries inside the instructions array —
+// the previous code would drop them and let the next write delete them.
+func TestReadOpenCodeConfig_RejectsNonStringInstructionEntry(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "opencode.json")
+	if err := os.WriteFile(configPath, []byte(`{"instructions": ["ok.md", 42]}`), 0644); err != nil {
+		t.Fatalf("seed write failed: %v", err)
+	}
+
+	_, err := ReadOpenCodeConfig(configPath)
+	if err == nil {
+		t.Fatal("expected error for non-string instruction entry")
+	}
+	if !strings.Contains(err.Error(), "`instructions[1]`") {
+		t.Errorf("error should point at the offending index, got: %v", err)
+	}
+}
+
+// TestReadOpenCodeConfig_TreatsNullAsAbsent pins the convention that a
+// JSON null at either key is treated as "key absent" rather than a
+// malformed value — that matches the standard JSON convention and lets
+// users opt out of a key without having to delete it.
+func TestReadOpenCodeConfig_TreatsNullAsAbsent(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "opencode.json")
+	if err := os.WriteFile(configPath, []byte(`{"mcp": null, "instructions": null}`), 0644); err != nil {
+		t.Fatalf("seed write failed: %v", err)
+	}
+
+	cfg, err := ReadOpenCodeConfig(configPath)
+	if err != nil {
+		t.Fatalf("null values should be treated as absent, got error: %v", err)
+	}
+	if len(cfg.MCP) != 0 {
+		t.Errorf("MCP should be empty for null, got: %v", cfg.MCP)
+	}
+	if len(cfg.Instructions) != 0 {
+		t.Errorf("Instructions should be empty for null, got: %v", cfg.Instructions)
 	}
 }
