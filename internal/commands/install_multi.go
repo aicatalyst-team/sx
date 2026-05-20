@@ -208,6 +208,10 @@ type profileMetadata struct {
 	Identity string
 	Profile  string
 	Vault    vaultpkg.Vault
+	// VaultKey is the vault's repo URL (or server URL for Sleuth) used
+	// to partition the asset disk cache so two vaults publishing the
+	// same name@version don't collide.
+	VaultKey string
 }
 
 // buildProfileMetadata derives the per-profile context from the slice
@@ -224,6 +228,7 @@ func buildProfileMetadata(profileLocks []profileLockFile) map[string]profileMeta
 			Identity: pl.Config.Identity,
 			Profile:  pl.ProfileName,
 			Vault:    pl.Vault,
+			VaultKey: pl.Config.GetRepositoryURL(),
 		}
 	}
 	return out
@@ -353,7 +358,7 @@ func downloadAssetsMultiVault(
 		mgmt.SetIdentityOverride(meta.Identity)
 		mgmt.SetAuditProfileTag(meta.Profile)
 
-		fetcher := assets.NewAssetFetcher(meta.Vault)
+		fetcher := assets.NewAssetFetcher(meta.Vault, meta.VaultKey)
 		results, err := fetcher.FetchAssets(ctx, g.assets, 10)
 		if err != nil {
 			groupErrs = append(groupErrs, fmt.Errorf("profile %s: %w", g.profile, err))

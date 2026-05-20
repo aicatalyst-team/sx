@@ -245,11 +245,7 @@ func runProfileList(cmd *cobra.Command, args []string) error {
 		if name == defaultProfile {
 			label = styledOut.BoldText(name)
 		}
-		if activeSet[name] {
-			styledOut.SuccessItem(marker + " " + label + " " + styledOut.MutedText(desc))
-		} else {
-			styledOut.ListItem(marker, label+" "+styledOut.MutedText(desc))
-		}
+		styledOut.ListItem(marker, label+" "+styledOut.MutedText(desc))
 	}
 
 	styledOut.Newline()
