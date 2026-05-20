@@ -87,6 +87,7 @@ func (a Actor) RequireRealIdentity() error {
 type actorCacheKey struct {
 	repoPath string
 	bot      string
+	identity string
 }
 
 // actorCache caches the result of CurrentGitActor per (repoPath, SX_BOT)
@@ -97,17 +98,45 @@ var (
 	actorCache   = make(map[actorCacheKey]Actor)
 )
 
+// identityOverride is a process-wide email override set from the active
+// profile's Identity field. When non-empty, CurrentGitActor uses it
+// instead of consulting `git config user.email`. Guarded by
+// identityOverrideMu so concurrent vault HTTP/git work (or background
+// audit writes) reads a stable value.
+var (
+	identityOverrideMu sync.RWMutex
+	identityOverride   string
+)
+
+// SetIdentityOverride sets the process-wide email override consulted by
+// CurrentGitActor. Pass empty to clear. Trims whitespace.
+func SetIdentityOverride(email string) {
+	identityOverrideMu.Lock()
+	identityOverride = strings.TrimSpace(email)
+	identityOverrideMu.Unlock()
+}
+
+// getIdentityOverrideLocked reads the override under the package mutex.
+func getIdentityOverrideLocked() string {
+	identityOverrideMu.RLock()
+	defer identityOverrideMu.RUnlock()
+	return identityOverride
+}
+
 // CurrentGitActor resolves the caller's identity. SX_BOT short-circuits
 // the resolution: if set, the actor is a bot identity, with Email
 // "bot:<name>" so audit log entries are attributed unambiguously and
-// never collide with a human email. Otherwise resolution proceeds via
-// `git config user.email` (scoped to the given repoPath if non-empty,
+// never collide with a human email. Otherwise, a profile-provided
+// identity (via SetIdentityOverride) wins next so per-profile email
+// overrides take effect. Failing that, resolution proceeds via `git
+// config user.email` (scoped to the given repoPath if non-empty,
 // falling back to global git config), with a $USER@host fallback for
 // unconfigured workstations. Returns ErrIdentityNotSet only when every
 // source fails.
 func CurrentGitActor(ctx context.Context, repoPath string) (Actor, error) {
 	botName := strings.TrimSpace(os.Getenv(SXBotEnv))
-	cacheKey := actorCacheKey{repoPath: repoPath, bot: botName}
+	override := getIdentityOverrideLocked()
+	cacheKey := actorCacheKey{repoPath: repoPath, bot: botName, identity: override}
 
 	actorCacheMu.Lock()
 	if cached, ok := actorCache[cacheKey]; ok {
@@ -121,6 +150,20 @@ func CurrentGitActor(ctx context.Context, repoPath string) (Actor, error) {
 			Email: "bot:" + botName,
 			Name:  botName,
 			Bot:   botName,
+		}
+		actorCacheMu.Lock()
+		actorCache[cacheKey] = actor
+		actorCacheMu.Unlock()
+		return actor, nil
+	}
+
+	if override != "" {
+		// Use git config user.name when available for a nicer display;
+		// the email is authoritative from the profile override.
+		name := readGitConfig(ctx, repoPath, "user.name")
+		actor := Actor{
+			Email: NormalizeEmail(override),
+			Name:  strings.TrimSpace(name),
 		}
 		actorCacheMu.Lock()
 		actorCache[cacheKey] = actor

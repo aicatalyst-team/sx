@@ -8,6 +8,26 @@ import (
 	"testing"
 )
 
+func TestCurrentGitActorRespectsIdentityOverride(t *testing.T) {
+	ResetActorCache()
+	t.Cleanup(func() {
+		SetIdentityOverride("")
+		ResetActorCache()
+	})
+	SetIdentityOverride("profile-user@example.com")
+
+	actor, err := CurrentGitActor(context.Background(), "")
+	if err != nil {
+		t.Fatalf("CurrentGitActor: %v", err)
+	}
+	if actor.Email != "profile-user@example.com" {
+		t.Fatalf("got %s, want profile-user@example.com", actor.Email)
+	}
+	if actor.Synthetic {
+		t.Fatalf("override should not be synthetic")
+	}
+}
+
 func TestCurrentGitActorWithConfiguredRepo(t *testing.T) {
 	ResetActorCache()
 	dir := t.TempDir()

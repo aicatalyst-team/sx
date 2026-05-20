@@ -22,6 +22,7 @@ import (
 	"github.com/sleuth-io/sx/internal/lockfile"
 	"github.com/sleuth-io/sx/internal/logger"
 	"github.com/sleuth-io/sx/internal/metadata"
+	"github.com/sleuth-io/sx/internal/mgmt"
 	"github.com/sleuth-io/sx/internal/scope"
 	"github.com/sleuth-io/sx/internal/ui"
 	"github.com/sleuth-io/sx/internal/ui/components"
@@ -324,21 +325,13 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 	// Handle Cursor workspace directory in hook mode
 	handleCursorWorkspace(hookMode, effectiveClientsFlag, log)
 
-	// Load and validate configuration
-	cfg, vault, err := loadConfigAndVault()
+	// Load every active profile's configuration and fetch their lock files.
+	profileLocks, mpc, primaryCfg, cfg, done, err := loadActiveProfilesAndLockFiles(ctx, status, styledOut)
 	if err != nil {
 		return err
 	}
-
-	// Fetch and parse lock file
-	lockFile, err := fetchLockFileWithCache(ctx, vault, cfg, status)
-	if err != nil {
-		if errors.Is(err, vaultpkg.ErrLockFileNotFound) {
-			styledOut.Info("No assets installed yet.")
-			styledOut.Muted("Add skills with 'sx add' or browse skills.sh with 'sx add --browse'.")
-			return nil
-		}
-		return err
+	if done {
+		return nil
 	}
 
 	// Detect environment (git context, scope, clients)
@@ -368,14 +361,22 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 		return nil
 	}
 
-	// Filter and resolve assets
+	// Filter and resolve assets across every active profile, applying
+	// the default-wins / first-active-wins conflict policy. Precedence
+	// for "first-active" is whichever profile appears first in
+	// profileLocks (already ordered per config.GetActiveProfileNames).
 	matcherScope := scope.NewMatcher(env.CurrentScope)
-	applicableAssets := filterAssetsByScope(lockFile, env.Clients, matcherScope)
-
-	sortedAssets, err := resolveAssetDependencies(lockFile, applicableAssets)
+	sortedAssets, assetVault, conflicts, err := mergeApplicableAssets(profileLocks, env.Clients, matcherScope)
 	if err != nil {
 		return err
 	}
+	if len(conflicts) > 0 {
+		reportConflicts(conflicts, mpc.DefaultProfile, styledOut)
+	}
+	// loadActiveLockFiles flipped the identity override for each profile
+	// during the per-vault fetch. Restore it to the primary profile for
+	// the rest of the flow.
+	mgmt.SetIdentityOverride(primaryCfg.Identity)
 
 	// --dry-run: print the resolved asset list and exit before we touch
 	// the tracker, download anything, or write to client directories.
@@ -403,8 +404,8 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 		return handleNothingToInstall(ctx, hookMode, tracker, sortedAssets, env, targetClientIDs, styledOut, out)
 	}
 
-	// Download assets
-	downloadResult, err := downloadAssetsWithStatus(ctx, vault, assetsToInstall, status, styledOut)
+	// Download assets, routing each to the vault of its origin profile.
+	downloadResult, err := downloadAssetsMultiVault(ctx, assetsToInstall, assetVault, status, styledOut)
 	if err != nil {
 		return err
 	}
