@@ -129,13 +129,15 @@ func promptProfileIdentity(cmd *cobra.Command, profileName string) error {
 }
 
 func newProfileUseCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "use <profile-name>",
 		Short: "Switch to a profile exclusively (deactivates all others)",
 		Long:  "Exclusive activation: makes the named profile the only active profile and sets it as the default. Use 'sx profile activate' to add to the active set without deactivating others.",
 		Args:  cobra.ExactArgs(1),
 		RunE:  runProfileUse,
 	}
+	cmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt when deactivating other active profiles")
+	return cmd
 }
 
 func newProfileCurrentCommand() *cobra.Command {
@@ -266,6 +268,27 @@ func runProfileUse(cmd *cobra.Command, args []string) error {
 
 	if _, ok := mpc.GetProfile(profileName); !ok {
 		return fmt.Errorf("profile not found: %s", profileName)
+	}
+
+	// If other profiles are currently active, warn before silently
+	// deactivating them — sx install would otherwise clean up their
+	// installed assets on the next run.
+	var toDeactivate []string
+	for _, n := range mpc.ActiveProfiles {
+		if n != profileName {
+			toDeactivate = append(toDeactivate, n)
+		}
+	}
+	if len(toDeactivate) > 0 {
+		skipConfirm, _ := cmd.Flags().GetBool("yes")
+		if !skipConfirm {
+			styledOut.Warning("This will deactivate: " + strings.Join(toDeactivate, ", "))
+			styledOut.Muted("Their installed assets will be removed on the next sx install.")
+			confirmed, err := components.Confirm("Continue?", true)
+			if err != nil || !confirmed {
+				return errors.New("profile use cancelled")
+			}
+		}
 	}
 
 	// Exclusive activation: shrink ActiveProfiles to just this one.

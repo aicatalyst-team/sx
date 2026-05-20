@@ -912,12 +912,14 @@ func installClientHooks(ctx context.Context, targetClients []clients.Client, pro
 
 // collectActiveVaultBootstrapOptions visits every active profile's vault
 // in the configured order, swapping the process-global identity/audit
-// overrides per call, and returns the concatenated options. The primary
-// profile's overrides are restored before returning so the caller's
-// subsequent operations attribute correctly.
+// overrides per call, and returns the concatenated options deduplicated
+// by Option.Key (first occurrence wins, matching the asset conflict
+// policy). The primary profile's overrides are restored before
+// returning so the caller's subsequent operations attribute correctly.
 func collectActiveVaultBootstrapOptions(ctx context.Context, profileMeta map[string]profileMetadata, profileOrder []string, primaryProfile string) []bootstrap.Option {
 	log := logger.Get()
 	var allOpts []bootstrap.Option
+	seen := make(map[string]string) // key → winning profile name
 	for _, name := range profileOrder {
 		meta, ok := profileMeta[name]
 		if !ok || meta.Vault == nil {
@@ -925,8 +927,14 @@ func collectActiveVaultBootstrapOptions(ctx context.Context, profileMeta map[str
 		}
 		mgmt.SetIdentityOverride(meta.Identity)
 		mgmt.SetAuditProfileTag(meta.Profile)
-		if opts := meta.Vault.GetBootstrapOptions(ctx); opts != nil {
-			allOpts = append(allOpts, opts...)
+		opts := meta.Vault.GetBootstrapOptions(ctx)
+		for _, opt := range opts {
+			if winner, taken := seen[opt.Key]; taken {
+				log.Debug("bootstrap option shadowed by earlier profile", "key", opt.Key, "winner", winner, "shadowed", name)
+				continue
+			}
+			seen[opt.Key] = name
+			allOpts = append(allOpts, opt)
 		}
 	}
 	// Restore overrides to the primary profile so the surrounding flow
