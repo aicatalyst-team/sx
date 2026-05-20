@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -50,7 +51,7 @@ func TestMergeApplicableAssets_DefaultFirstWins(t *testing.T) {
 		buildProfileLock("work", "shared", "work-only"),
 		buildProfileLock("personal", "shared", "personal-only"),
 	}
-	sortedAssets, vaultMap, conflicts, err := mergeApplicableAssets(locks, clientList, matcher)
+	sortedAssets, vaultMap, origin, conflicts, err := mergeApplicableAssets(locks, clientList, matcher)
 	if err != nil {
 		t.Fatalf("mergeApplicableAssets: %v", err)
 	}
@@ -72,6 +73,12 @@ func TestMergeApplicableAssets_DefaultFirstWins(t *testing.T) {
 	if vaultMap == nil {
 		t.Fatalf("vaultMap should be non-nil")
 	}
+	if origin["shared"] != "work" {
+		t.Fatalf("origin[shared]=%s want work", origin["shared"])
+	}
+	if origin["personal-only"] != "personal" {
+		t.Fatalf("origin[personal-only]=%s want personal", origin["personal-only"])
+	}
 }
 
 func TestMergeApplicableAssets_ThreeWayConflict(t *testing.T) {
@@ -83,7 +90,8 @@ func TestMergeApplicableAssets_ThreeWayConflict(t *testing.T) {
 		buildProfileLock("b", "dup"),
 		buildProfileLock("c", "dup"),
 	}
-	_, _, conflicts, err := mergeApplicableAssets(locks, clientList, matcher)
+	sorted, vaultMap, _, conflicts, err := mergeApplicableAssets(locks, clientList, matcher)
+	_, _ = sorted, vaultMap
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -119,5 +127,26 @@ func TestReportConflicts_NonDefaultWinsWarns(t *testing.T) {
 	got := buf.String()
 	if !strings.Contains(got, "shared") {
 		t.Fatalf("expected warning to name asset, got: %s", got)
+	}
+}
+
+func TestBuildProfileMetadataSkipsFailures(t *testing.T) {
+	locks := []profileLockFile{
+		{ProfileName: "good", Config: &config.Config{Identity: "good@x.com", ProfileName: "good"}, LockFile: &lockfile.LockFile{}},
+		{ProfileName: "fetch-failed", Config: &config.Config{Identity: "x@x.com"}, FetchErr: errors.New("boom")},
+		{ProfileName: "no-config", LockFile: &lockfile.LockFile{}},
+	}
+	meta := buildProfileMetadata(locks)
+	if _, ok := meta["good"]; !ok {
+		t.Fatalf("good should be in metadata")
+	}
+	if _, ok := meta["fetch-failed"]; ok {
+		t.Fatalf("fetch-failed should not be in metadata (no lockfile)")
+	}
+	if _, ok := meta["no-config"]; ok {
+		t.Fatalf("no-config should not be in metadata (nil config)")
+	}
+	if meta["good"].Identity != "good@x.com" {
+		t.Fatalf("identity carried wrong, got %q", meta["good"].Identity)
 	}
 }

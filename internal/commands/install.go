@@ -366,17 +366,26 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 	// for "first-active" is whichever profile appears first in
 	// profileLocks (already ordered per config.GetActiveProfileNames).
 	matcherScope := scope.NewMatcher(env.CurrentScope)
-	sortedAssets, assetVault, conflicts, err := mergeApplicableAssets(profileLocks, env.Clients, matcherScope)
+	sortedAssets, _, assetOrigin, conflicts, err := mergeApplicableAssets(profileLocks, env.Clients, matcherScope)
 	if err != nil {
 		return err
 	}
 	if len(conflicts) > 0 {
 		reportConflicts(conflicts, mpc.DefaultProfile, styledOut)
 	}
-	// loadActiveLockFiles flipped the identity override for each profile
-	// during the per-vault fetch. Restore it to the primary profile for
-	// the rest of the flow.
+	profileMeta := buildProfileMetadata(profileLocks)
+	profileOrder := make([]string, 0, len(profileLocks))
+	for _, pl := range profileLocks {
+		if pl.LockFile != nil {
+			profileOrder = append(profileOrder, pl.ProfileName)
+		}
+	}
+	// loadActiveLockFiles flipped the identity + audit overrides for each
+	// profile during the per-vault fetch. Restore both to the primary
+	// profile so any audit events emitted by the rest of the flow attribute
+	// correctly. Per-profile swaps happen again inside the download step.
 	mgmt.SetIdentityOverride(primaryCfg.Identity)
+	mgmt.SetAuditProfileTag(primaryCfg.ProfileName)
 
 	// --dry-run: print the resolved asset list and exit before we touch
 	// the tracker, download anything, or write to client directories.
@@ -404,11 +413,17 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 		return handleNothingToInstall(ctx, hookMode, tracker, sortedAssets, env, targetClientIDs, styledOut, out)
 	}
 
-	// Download assets, routing each to the vault of its origin profile.
-	downloadResult, err := downloadAssetsMultiVault(ctx, assetsToInstall, assetVault, status, styledOut)
+	// Download assets, routing each to its origin profile's vault and
+	// swapping the identity/audit overrides per group so attribution
+	// matches the originating profile.
+	downloadResult, err := downloadAssetsMultiVault(ctx, assetsToInstall, assetOrigin, profileMeta, profileOrder, status, styledOut)
 	if err != nil {
 		return err
 	}
+	// Restore primary overrides once downloads complete; remaining flow
+	// (install hooks, tracker save, bootstrap) belongs to the primary.
+	mgmt.SetIdentityOverride(primaryCfg.Identity)
+	mgmt.SetAuditProfileTag(primaryCfg.ProfileName)
 
 	// Install assets to their appropriate locations
 	installResult := installAssets(ctx, downloadResult.Downloads, env.GitContext, env.CurrentScope, env.Clients, styledOut, strict)

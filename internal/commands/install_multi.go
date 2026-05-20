@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/sleuth-io/sx/internal/assets"
@@ -146,9 +147,9 @@ func mergeApplicableAssets(
 	profileLocks []profileLockFile,
 	targetClients []clients.Client,
 	matcherScope *scope.Matcher,
-) (sortedAssets []*lockfile.Asset, assetVault map[string]vaultpkg.Vault, conflicts []assetConflict, err error) {
+) (sortedAssets []*lockfile.Asset, assetVault map[string]vaultpkg.Vault, assetOrigin map[string]string, conflicts []assetConflict, err error) {
 	assetVault = make(map[string]vaultpkg.Vault)
-	assetOrigin := make(map[string]string)
+	assetOrigin = make(map[string]string)
 	conflictByName := make(map[string]*assetConflict)
 
 	for _, pl := range profileLocks {
@@ -158,7 +159,7 @@ func mergeApplicableAssets(
 		applicable := filterAssetsByScope(pl.LockFile, targetClients, matcherScope)
 		sorted, resolveErr := resolveAssetDependencies(pl.LockFile, applicable)
 		if resolveErr != nil {
-			return nil, nil, nil, fmt.Errorf("dependency resolution for profile %s: %w", pl.ProfileName, resolveErr)
+			return nil, nil, nil, nil, fmt.Errorf("dependency resolution for profile %s: %w", pl.ProfileName, resolveErr)
 		}
 		for _, asset := range sorted {
 			if existing, taken := assetOrigin[asset.Name]; taken {
@@ -186,7 +187,36 @@ func mergeApplicableAssets(
 			conflicts = append(conflicts, *conflictByName[n])
 		}
 	}
-	return sortedAssets, assetVault, conflicts, nil
+	return sortedAssets, assetVault, assetOrigin, conflicts, nil
+}
+
+// profileMetadata pairs identity + audit-tag context for the profiles
+// that own at least one downloaded asset. downloadAssetsMultiVault
+// consults this to swap the process-global identity/audit overrides
+// for each vault group's fetch.
+type profileMetadata struct {
+	Identity string
+	Profile  string
+	Vault    vaultpkg.Vault
+}
+
+// buildProfileMetadata derives the per-profile context from the slice
+// of profile lock files, indexed by ProfileName. Only profiles that
+// successfully fetched a lock file (and thus participated in the merge)
+// are included.
+func buildProfileMetadata(profileLocks []profileLockFile) map[string]profileMetadata {
+	out := make(map[string]profileMetadata, len(profileLocks))
+	for _, pl := range profileLocks {
+		if pl.LockFile == nil || pl.Config == nil {
+			continue
+		}
+		out[pl.ProfileName] = profileMetadata{
+			Identity: pl.Config.Identity,
+			Profile:  pl.ProfileName,
+			Vault:    pl.Vault,
+		}
+	}
+	return out
 }
 
 // reportFetchErrors surfaces per-profile lock file fetch failures as
@@ -227,13 +257,18 @@ func reportConflicts(conflicts []assetConflict, defaultProfile string, styledOut
 }
 
 // downloadAssetsMultiVault downloads each asset from the vault its
-// origin profile points at, then aggregates the results into the same
-// shape as the single-vault downloader so the rest of the install flow
-// is unchanged.
+// origin profile points at, swapping the process-global identity and
+// audit-profile-tag overrides per group so a profile's downloads run
+// under that profile's identity. Failures of one vault group are
+// reported as warnings; the call only errors out when no group produced
+// any successful downloads. Caller is responsible for restoring the
+// primary identity/audit-tag after the function returns.
 func downloadAssetsMultiVault(
 	ctx context.Context,
 	assetsToInstall []*lockfile.Asset,
-	assetVault map[string]vaultpkg.Vault,
+	assetOrigin map[string]string,
+	profileMeta map[string]profileMetadata,
+	profileOrder []string,
 	status *components.Status,
 	styledOut *ui.Output,
 ) (*downloadAssetsResult, error) {
@@ -241,43 +276,74 @@ func downloadAssetsMultiVault(
 		return &downloadAssetsResult{}, nil
 	}
 
-	// Group assets by their backing vault so we issue one batched fetch
-	// per vault (preserving the existing per-vault concurrency limit).
+	// Group assets by origin profile so we issue one batched fetch per
+	// profile (preserving the existing per-vault concurrency limit) and
+	// have a stable iteration order matching the input config.
 	type group struct {
-		vault  vaultpkg.Vault
-		assets []*lockfile.Asset
+		profile string
+		assets  []*lockfile.Asset
 	}
-	groups := make(map[vaultpkg.Vault]*group)
+	groupsByProfile := make(map[string]*group)
 	for _, asset := range assetsToInstall {
-		v, ok := assetVault[asset.Name]
-		if !ok || v == nil {
-			return nil, fmt.Errorf("no vault routing for asset %s", asset.Name)
+		origin, ok := assetOrigin[asset.Name]
+		if !ok {
+			return nil, fmt.Errorf("no origin profile recorded for asset %s", asset.Name)
 		}
-		g, exists := groups[v]
+		if _, hasMeta := profileMeta[origin]; !hasMeta {
+			return nil, fmt.Errorf("no profile metadata for origin %s of asset %s", origin, asset.Name)
+		}
+		g, exists := groupsByProfile[origin]
 		if !exists {
-			g = &group{vault: v}
-			groups[v] = g
+			g = &group{profile: origin}
+			groupsByProfile[origin] = g
 		}
 		g.assets = append(g.assets, asset)
+	}
+
+	// Build an ordered slice using profileOrder so output is stable.
+	orderedGroups := make([]*group, 0, len(groupsByProfile))
+	for _, name := range profileOrder {
+		if g, ok := groupsByProfile[name]; ok {
+			orderedGroups = append(orderedGroups, g)
+		}
+	}
+	// Defensive: include any group not in profileOrder (shouldn't happen
+	// but guards against silently dropping assets).
+	for name, g := range groupsByProfile {
+		if !slices.ContainsFunc(orderedGroups, func(o *group) bool { return o.profile == name }) {
+			orderedGroups = append(orderedGroups, g)
+		}
 	}
 
 	status.Start(fmt.Sprintf("Downloading %d assets", len(assetsToInstall)))
 
 	var merged []assets.DownloadResult
-	for _, g := range groups {
-		fetcher := assets.NewAssetFetcher(g.vault)
+	var groupErrs []error
+	for _, g := range orderedGroups {
+		meta := profileMeta[g.profile]
+		mgmt.SetIdentityOverride(meta.Identity)
+		mgmt.SetAuditProfileTag(meta.Profile)
+
+		fetcher := assets.NewAssetFetcher(meta.Vault)
 		results, err := fetcher.FetchAssets(ctx, g.assets, 10)
 		if err != nil {
-			status.Clear()
-			return nil, fmt.Errorf("failed to fetch assets: %w", err)
+			groupErrs = append(groupErrs, fmt.Errorf("profile %s: %w", g.profile, err))
+			continue
 		}
 		merged = append(merged, results...)
+	}
+
+	for _, err := range groupErrs {
+		styledOut.Warning(err.Error())
 	}
 
 	result := processDownloadResults(merged, styledOut)
 	status.Clear()
 
 	if len(result.Downloads) == 0 {
+		if len(groupErrs) > 0 {
+			return nil, errors.New("no assets downloaded successfully (every vault download failed; see warnings above)")
+		}
 		styledOut.Error("No assets downloaded successfully")
 		return nil, errors.New("no assets downloaded successfully")
 	}
