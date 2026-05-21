@@ -14,12 +14,12 @@ func execGitCommand(ctx context.Context, sshKeyPath string, args ...string) *exe
 
 	// Start from the parent environment and disable interactive prompts so
 	// git fails fast instead of hanging on /dev/tty when credentials are
-	// missing or the repo is unreachable/private.
-	env := append(os.Environ(),
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_ASKPASS=",
-		"SSH_ASKPASS=",
-	)
+	// missing or the repo is unreachable/private. GIT_TERMINAL_PROMPT=0
+	// is the load-bearing setting; we deliberately do NOT set empty
+	// GIT_ASKPASS/SSH_ASKPASS because their "unset vs empty" semantics
+	// vary between git versions, and the terminal-prompt path is already
+	// closed.
+	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 
 	if sshKeyPath != "" {
 		// Validate SSH key (log warning but continue - will fail at exec time if invalid)

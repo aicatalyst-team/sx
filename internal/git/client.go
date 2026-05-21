@@ -104,7 +104,7 @@ func (c *Client) Fetch(ctx context.Context, repoPath string) error {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("git fetch failed: %w\nOutput: %s", err, string(output))
+		return classifyRemoteError(remoteLocation(ctx, c.sshKeyPath, repoPath), string(output), err)
 	}
 
 	return nil
@@ -128,7 +128,7 @@ func (c *Client) Pull(ctx context.Context, repoPath string) error {
 	log.Debug("git pull completed", "duration", time.Since(start), "error", err)
 
 	if err != nil {
-		return fmt.Errorf("git pull failed: %w\nOutput: %s", err, string(output))
+		return classifyRemoteError(remoteLocation(ctx, c.sshKeyPath, repoPath), string(output), err)
 	}
 
 	return nil
@@ -149,7 +149,7 @@ func (c *Client) PullRebase(ctx context.Context, repoPath string) error {
 	log.Debug("git pull --rebase completed", "duration", time.Since(start), "error", err)
 
 	if err != nil {
-		return fmt.Errorf("git pull --rebase failed: %w\nOutput: %s", err, string(output))
+		return classifyRemoteError(remoteLocation(ctx, c.sshKeyPath, repoPath), string(output), err)
 	}
 
 	return nil
@@ -162,7 +162,7 @@ func (c *Client) Push(ctx context.Context, repoPath string) error {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("git push failed: %w\nOutput: %s", err, string(output))
+		return classifyRemoteError(remoteLocation(ctx, c.sshKeyPath, repoPath), string(output), err)
 	}
 
 	return nil
@@ -175,7 +175,7 @@ func (c *Client) PushSetUpstream(ctx context.Context, repoPath, branch string) e
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("git push failed: %w\nOutput: %s", err, string(output))
+		return classifyRemoteError(remoteLocation(ctx, c.sshKeyPath, repoPath), string(output), err)
 	}
 
 	return nil
@@ -365,6 +365,22 @@ func (c *Client) HasStagedChanges(ctx context.Context, repoPath string) (bool, e
 
 	// Exit code 0 means no changes
 	return false, nil
+}
+
+// remoteLocation returns the best human-readable identifier for a repo in
+// error messages: prefer the origin URL (what the user typed/cloned from),
+// fall back to the local path. Used by Fetch/Pull/Push so classified errors
+// mention something the user recognizes, not a cache-dir hash.
+func remoteLocation(ctx context.Context, sshKeyPath, repoPath string) string {
+	cmd := execGitCommand(ctx, sshKeyPath, "config", "--get", "remote.origin.url")
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err == nil {
+		if url := strings.TrimSpace(string(out)); url != "" {
+			return url
+		}
+	}
+	return repoPath
 }
 
 // classifyRemoteError turns raw git stderr/output into an actionable error.

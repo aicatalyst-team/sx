@@ -26,11 +26,12 @@ func TestLsRemote_ClassifiesRealGitErrors(t *testing.T) {
 			t.Fatal("expected error, got nil")
 		}
 		msg := err.Error()
-		// Either branch is acceptable — the point is that we did NOT
-		// return raw "exit status 128" with no context.
-		if !strings.Contains(msg, "repository not found") &&
-			!strings.Contains(msg, "git operation failed") {
-			t.Errorf("error not classified, got raw output: %s", msg)
+		// Strict assertion: must hit the "not found" branch of the
+		// classifier. The fallback branch would mean classification
+		// silently broke — if a new git version phrases the error
+		// differently, fix the classifier substring list, not the test.
+		if !strings.Contains(msg, "repository not found") {
+			t.Errorf("error not classified as not-found: %s", msg)
 		}
 		if !strings.Contains(msg, missing) {
 			t.Errorf("error should mention the URL %q, got: %s", missing, msg)
@@ -46,9 +47,8 @@ func TestLsRemote_ClassifiesRealGitErrors(t *testing.T) {
 			t.Fatal("expected error, got nil")
 		}
 		msg := err.Error()
-		if !strings.Contains(msg, "network error") &&
-			!strings.Contains(msg, "git operation failed") {
-			t.Errorf("error not classified, got raw output: %s", msg)
+		if !strings.Contains(msg, "network error") {
+			t.Errorf("error not classified as network error: %s", msg)
 		}
 	})
 }

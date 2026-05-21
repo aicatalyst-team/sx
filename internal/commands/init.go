@@ -448,6 +448,7 @@ func initGitRepository(cmd *cobra.Command, ctx context.Context, enabledClients [
 // succeeds, the user declines to retry, or input fails. The verify seam keeps
 // the loop logic testable without real network or git invocations.
 func promptForValidGitURL(ctx context.Context, defaultURL string, in io.Reader, out io.Writer, verify repoVerifier) (string, error) {
+	styledOut := ui.NewOutput(out, out)
 	for {
 		repoURL, err := components.InputWithIO("Enter Git repository URL", "", defaultURL, in, out)
 		if err != nil {
@@ -457,9 +458,9 @@ func promptForValidGitURL(ctx context.Context, defaultURL string, in io.Reader, 
 			return "", errors.New("repository URL is required")
 		}
 
-		fmt.Fprintln(out, "Verifying repository access...")
+		styledOut.Info("Verifying repository access...")
 		if vErr := verify(ctx, repoURL); vErr != nil {
-			fmt.Fprintf(out, "Cannot access %s: %v\n", repoURL, vErr)
+			styledOut.Error(fmt.Sprintf("Cannot access %s: %v", repoURL, vErr))
 			retry, cerr := components.ConfirmWithIO("Try a different URL?", true, in, out)
 			if cerr != nil {
 				return "", cerr
