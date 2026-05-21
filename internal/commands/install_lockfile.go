@@ -20,7 +20,13 @@ import (
 // case so callers can short-circuit without treating it as a hard
 // failure.
 func fetchLockFile(ctx context.Context, vault vaultpkg.Vault, cfg *config.Config) (*lockfile.LockFile, error) {
-	cachedETag, _ := cache.LoadETag(cfg.RepositoryURL)
+	// Key the cache by VaultIdentifier rather than raw RepositoryURL so
+	// legacy Sleuth profiles (ServerURL set, RepositoryURL empty) get
+	// distinct cache paths. Two such profiles in the same active set
+	// would otherwise share cache entries and — under the parallel
+	// fan-out in loadActiveLockFiles — race on the same cache file.
+	cacheKey := cfg.VaultIdentifier()
+	cachedETag, _ := cache.LoadETag(cacheKey)
 	lockFileData, newETag, notModified, err := vault.GetLockFile(ctx, cachedETag)
 	if err != nil {
 		if errors.Is(err, vaultpkg.ErrLockFileNotFound) {
@@ -30,12 +36,12 @@ func fetchLockFile(ctx context.Context, vault vaultpkg.Vault, cfg *config.Config
 	}
 
 	if notModified {
-		lockFileData, err = cache.LoadLockFile(cfg.RepositoryURL)
+		lockFileData, err = cache.LoadLockFile(cacheKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load cached lock file: %w", err)
 		}
 	} else {
-		saveLockFileToCache(cfg.RepositoryURL, newETag, lockFileData)
+		saveLockFileToCache(cacheKey, newETag, lockFileData)
 	}
 
 	lf, err := lockfile.Parse(lockFileData)
