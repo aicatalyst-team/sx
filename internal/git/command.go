@@ -12,6 +12,15 @@ import (
 func execGitCommand(ctx context.Context, sshKeyPath string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", args...)
 
+	// Start from the parent environment and disable interactive prompts so
+	// git fails fast instead of hanging on /dev/tty when credentials are
+	// missing or the repo is unreachable/private.
+	env := append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_ASKPASS=",
+		"SSH_ASKPASS=",
+	)
+
 	if sshKeyPath != "" {
 		// Validate SSH key (log warning but continue - will fail at exec time if invalid)
 		if err := ValidateSSHKey(sshKeyPath); err != nil {
@@ -20,9 +29,10 @@ func execGitCommand(ctx context.Context, sshKeyPath string, args ...string) *exe
 
 		// Configure SSH command
 		sshCmd := buildSSHCommand(sshKeyPath)
-		cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+sshCmd)
+		env = append(env, "GIT_SSH_COMMAND="+sshCmd)
 	}
 
+	cmd.Env = env
 	return cmd
 }
 

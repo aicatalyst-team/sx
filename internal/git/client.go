@@ -91,7 +91,7 @@ func (c *Client) Clone(ctx context.Context, repoURL, destPath string) error {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("git clone failed: %w\nOutput: %s", err, string(output))
+		return classifyRemoteError(repoURL, string(output), err)
 	}
 
 	return nil
@@ -212,7 +212,12 @@ func (c *Client) LsRemote(ctx context.Context, repoURL, ref string) (string, err
 
 	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("git ls-remote failed: %w", err)
+		var stderr string
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			stderr = string(exitErr.Stderr)
+		}
+		return "", classifyRemoteError(repoURL, stderr, err)
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
@@ -360,6 +365,40 @@ func (c *Client) HasStagedChanges(ctx context.Context, repoPath string) (bool, e
 
 	// Exit code 0 means no changes
 	return false, nil
+}
+
+// classifyRemoteError turns raw git stderr/output into an actionable error.
+// It distinguishes "repo not found" from "auth required" so the caller can
+// show a useful next-step hint instead of dumping git's raw output.
+func classifyRemoteError(repoURL, output string, err error) error {
+	authHint := "To authenticate:\n" +
+		"  - For private repos over HTTPS: configure a git credential helper\n" +
+		"    (e.g. `gh auth setup-git` for GitHub, or `git config --global credential.helper store`)\n" +
+		"  - Or use an SSH URL like git@github.com:owner/repo.git\n" +
+		"    with your SSH agent running, or pass --ssh-key /path/to/key"
+
+	lc := strings.ToLower(output)
+	switch {
+	case strings.Contains(lc, "terminal prompts disabled"),
+		strings.Contains(lc, "could not read username"),
+		strings.Contains(lc, "could not read password"),
+		strings.Contains(lc, "authentication failed"),
+		strings.Contains(lc, "permission denied (publickey)"):
+		return fmt.Errorf("authentication required for %s\nThe repository may be private, or you may not have access.\n%s", repoURL, authHint)
+	case strings.Contains(lc, "repository not found"),
+		strings.Contains(lc, "does not appear to be a git repository"),
+		strings.Contains(lc, "remote: not found"):
+		return fmt.Errorf("repository not found: %s\nCheck the URL is correct. If it's a private repo, this can also mean you lack access:\n%s", repoURL, authHint)
+	case strings.Contains(lc, "could not resolve host"),
+		strings.Contains(lc, "network is unreachable"),
+		strings.Contains(lc, "connection refused"),
+		strings.Contains(lc, "connection timed out"):
+		return fmt.Errorf("network error reaching %s: %s", repoURL, strings.TrimSpace(output))
+	}
+	if output == "" {
+		return fmt.Errorf("git operation failed for %s: %w", repoURL, err)
+	}
+	return fmt.Errorf("git operation failed for %s: %w\nOutput: %s", repoURL, err, output)
 }
 
 // isHexString checks if a string contains only hexadecimal characters
