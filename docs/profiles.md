@@ -12,7 +12,7 @@ more than one:
 
 Profiles can be active one-at-a-time (the classic single-profile model)
 or several-at-once. When more than one profile is active, `sx install`
-fetches every active profile's lock file in sequence and merges the
+fetches every active profile's lock file in parallel and merges the
 applicable assets into one installation pass.
 
 Each profile carries its own vault URL, auth, and an optional

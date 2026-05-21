@@ -3,8 +3,10 @@ package mgmt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -188,6 +190,96 @@ func TestFallbackEmail_UsesLocalPrefix(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, "local:") {
 		t.Errorf("fallback email must carry the local: prefix to prevent admin-list collisions, got %q", got)
+	}
+}
+
+// TestContextWithIdentity_PrefersContextOverGlobal verifies that an
+// identity carried on the context wins over the process-global override.
+// This is the foundation for parallel multi-profile lock fetches where
+// each goroutine resolves identity against its own profile without
+// touching the shared override.
+func TestContextWithIdentity_PrefersContextOverGlobal(t *testing.T) {
+	ResetActorCache()
+	t.Cleanup(func() {
+		SetIdentityOverride("")
+		ResetActorCache()
+	})
+	SetIdentityOverride("global@example.com")
+
+	ctx := ContextWithIdentity(context.Background(), "ctx@example.com")
+	actor, err := CurrentGitActor(ctx, "")
+	if err != nil {
+		t.Fatalf("CurrentGitActor: %v", err)
+	}
+	if actor.Email != "ctx@example.com" {
+		t.Errorf("expected ctx@example.com to win, got %s", actor.Email)
+	}
+
+	// Same call without the context wrapping should fall back to the
+	// global override.
+	actor, err = CurrentGitActor(context.Background(), "")
+	if err != nil {
+		t.Fatalf("CurrentGitActor (no ctx identity): %v", err)
+	}
+	if actor.Email != "global@example.com" {
+		t.Errorf("expected global@example.com fallback, got %s", actor.Email)
+	}
+}
+
+// TestContextWithIdentity_EmptyIsNoop verifies that an empty email
+// leaves ctx untouched so callers don't accidentally clear a parent
+// identity by passing through.
+func TestContextWithIdentity_EmptyIsNoop(t *testing.T) {
+	parent := ContextWithIdentity(context.Background(), "parent@example.com")
+	child := ContextWithIdentity(parent, "")
+	if got := identityFromContext(child); got != "parent@example.com" {
+		t.Errorf("empty email must not clear parent identity, got %q", got)
+	}
+}
+
+// TestCurrentGitActor_ConcurrentContextIdentitiesDontBleed exercises the
+// multi-profile fan-out invariant: N goroutines each carrying a
+// different ContextWithIdentity must each see their own identity, with
+// no cross-bleed even if they execute simultaneously.
+func TestCurrentGitActor_ConcurrentContextIdentitiesDontBleed(t *testing.T) {
+	ResetActorCache()
+	t.Cleanup(func() {
+		SetIdentityOverride("")
+		ResetActorCache()
+	})
+	// Set a global override that none of the goroutines should ever
+	// resolve to (they all carry context identities).
+	SetIdentityOverride("global@example.com")
+
+	const goroutines = 16
+	emails := make([]string, goroutines)
+	for i := range emails {
+		emails[i] = fmt.Sprintf("profile-%d@example.com", i)
+	}
+
+	got := make([]string, goroutines)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, email := range emails {
+		wg.Add(1)
+		go func(i int, email string) {
+			defer wg.Done()
+			<-start
+			actor, err := CurrentGitActor(ContextWithIdentity(context.Background(), email), "")
+			if err != nil {
+				t.Errorf("goroutine %d: %v", i, err)
+				return
+			}
+			got[i] = actor.Email
+		}(i, email)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, want := range emails {
+		if got[i] != want {
+			t.Errorf("goroutine %d resolved %q, want %q", i, got[i], want)
+		}
 	}
 }
 

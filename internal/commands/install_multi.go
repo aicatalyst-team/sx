@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"sync"
 
 	"github.com/sleuth-io/sx/internal/assets"
 	"github.com/sleuth-io/sx/internal/clients"
@@ -55,8 +56,11 @@ func loadActiveProfilesAndLockFiles(
 			return nil, nil, nil, nil, false, fmt.Errorf("invalid configuration for profile %s: %w", c.ProfileName, validateErr)
 		}
 	}
-	// Seed identity from the first active profile for the lock-fetch
-	// loop's initial pass; loadActiveLockFiles swaps it per-iteration.
+	// Seed the process-global identity from the first active profile so
+	// any code path that runs before the parallel fan-out completes (or
+	// that reads the override without a context) sees a sane value.
+	// loadActiveLockFiles passes per-profile identity via context so the
+	// global override is not touched mid-fetch.
 	mgmt.SetIdentityOverride(activeConfigs[0].Identity)
 
 	profileLocks = loadActiveLockFiles(ctx, activeConfigs, status)
@@ -99,36 +103,53 @@ func loadActiveProfilesAndLockFiles(
 	return profileLocks, mpc, primaryCfg, cfg, false, nil
 }
 
-// loadActiveLockFiles fetches lock files for every active profile,
-// honoring per-profile identity overrides so team/user scope resolution
-// happens against the right email. Individual fetch failures are
-// captured per-profile rather than failing the whole call so partial
-// installs can proceed.
+// loadActiveLockFiles fetches lock files for every active profile in
+// parallel, honoring per-profile identity overrides so team/user scope
+// resolution happens against the right email. Each goroutine carries
+// its profile's identity on its context (mgmt.ContextWithIdentity), so
+// the process-global override is not touched and concurrent fetches
+// cannot bleed identity into each other. Audit attribution doesn't
+// matter during fetch (no mutations), so the global audit tag is left
+// for the caller to set after the fan-out. Individual fetch failures
+// are captured per-profile rather than failing the whole call so
+// partial installs can proceed.
 func loadActiveLockFiles(ctx context.Context, configs []*config.Config, status *components.Status) []profileLockFile {
-	results := make([]profileLockFile, 0, len(configs))
-	for _, cfg := range configs {
-		entry := profileLockFile{ProfileName: cfg.ProfileName, Config: cfg}
-		// Validation already ran in loadActiveProfilesAndLockFiles; if
-		// callers stop pre-validating, restore the inline check here.
-		// Switch identity context to this profile before any vault op
-		// that resolves the caller's actor.
-		mgmt.SetIdentityOverride(cfg.Identity)
-		mgmt.SetAuditProfileTag(cfg.ProfileName)
-		vault, err := vaultpkg.NewFromConfig(cfg)
-		if err != nil {
-			entry.FetchErr = fmt.Errorf("failed to create vault for profile %s: %w", cfg.ProfileName, err)
-			results = append(results, entry)
-			continue
-		}
-		entry.Vault = vault
-		lf, err := fetchLockFileWithCache(ctx, vault, cfg, status)
-		if err != nil {
-			entry.FetchErr = err
-		} else {
-			entry.LockFile = lf
-		}
-		results = append(results, entry)
+	results := make([]profileLockFile, len(configs))
+	if len(configs) == 0 {
+		return results
 	}
+
+	if len(configs) == 1 {
+		status.Start("Fetching lock file")
+	} else {
+		status.Start(fmt.Sprintf("Fetching lock files for %d profiles", len(configs)))
+	}
+
+	var wg sync.WaitGroup
+	for i, cfg := range configs {
+		wg.Add(1)
+		go func(i int, cfg *config.Config) {
+			defer wg.Done()
+			entry := profileLockFile{ProfileName: cfg.ProfileName, Config: cfg}
+			fetchCtx := mgmt.ContextWithIdentity(ctx, cfg.Identity)
+			vault, err := vaultpkg.NewFromConfig(cfg)
+			if err != nil {
+				entry.FetchErr = fmt.Errorf("failed to create vault for profile %s: %w", cfg.ProfileName, err)
+				results[i] = entry
+				return
+			}
+			entry.Vault = vault
+			lf, err := fetchLockFile(fetchCtx, vault, cfg)
+			if err != nil {
+				entry.FetchErr = err
+			} else {
+				entry.LockFile = lf
+			}
+			results[i] = entry
+		}(i, cfg)
+	}
+	wg.Wait()
+	status.Clear()
 	return results
 }
 

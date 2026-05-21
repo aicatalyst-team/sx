@@ -445,10 +445,11 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 			profileOrder = append(profileOrder, pl.ProfileName)
 		}
 	}
-	// loadActiveLockFiles flipped the identity + audit overrides for each
-	// profile during the per-vault fetch. Restore both to the primary
-	// profile so any audit events emitted by the rest of the flow attribute
-	// correctly. Per-profile swaps happen again inside the download step.
+	// Lock-file fetches ran in parallel with identity scoped per goroutine
+	// via context, so the process-global override was not touched. Set
+	// it (and the audit tag) to the primary profile now so any audit
+	// events emitted by the rest of the flow attribute correctly. The
+	// download step swaps both again per vault group.
 	mgmt.SetIdentityOverride(primaryCfg.Identity)
 	mgmt.SetAuditProfileTag(primaryCfg.ProfileName)
 

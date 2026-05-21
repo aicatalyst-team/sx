@@ -123,19 +123,52 @@ func getIdentityOverrideLocked() string {
 	return identityOverride
 }
 
+// identityContextKey scopes a per-call identity override carried in
+// context. Used by the multi-profile install fan-out so concurrent lock
+// file fetches can each resolve actor against their own profile email
+// without racing the process-global override.
+type identityContextKey struct{}
+
+// ContextWithIdentity returns a derived context that carries the given
+// email as the per-call identity override. CurrentGitActor consults
+// this in preference to the process-global override, so concurrent
+// fetches can scope identity independently. Empty email returns ctx
+// unchanged.
+func ContextWithIdentity(ctx context.Context, email string) context.Context {
+	trimmed := strings.TrimSpace(email)
+	if trimmed == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, identityContextKey{}, trimmed)
+}
+
+// identityFromContext extracts the per-call identity override, returning
+// "" when ctx is nil or no identity was set.
+func identityFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	v, _ := ctx.Value(identityContextKey{}).(string)
+	return v
+}
+
 // CurrentGitActor resolves the caller's identity. SX_BOT short-circuits
 // the resolution: if set, the actor is a bot identity, with Email
 // "bot:<name>" so audit log entries are attributed unambiguously and
-// never collide with a human email. Otherwise, a profile-provided
-// identity (via SetIdentityOverride) wins next so per-profile email
-// overrides take effect. Failing that, resolution proceeds via `git
-// config user.email` (scoped to the given repoPath if non-empty,
-// falling back to global git config), with a $USER@host fallback for
-// unconfigured workstations. Returns ErrIdentityNotSet only when every
-// source fails.
+// never collide with a human email. Otherwise resolution prefers a
+// per-call identity carried on ctx (see ContextWithIdentity) so
+// concurrent multi-profile work can scope identity per goroutine;
+// falling back to the process-global override (SetIdentityOverride),
+// then to `git config user.email` (scoped to the given repoPath if
+// non-empty, falling back to global git config), with a $USER@host
+// fallback for unconfigured workstations. Returns ErrIdentityNotSet
+// only when every source fails.
 func CurrentGitActor(ctx context.Context, repoPath string) (Actor, error) {
 	botName := strings.TrimSpace(os.Getenv(SXBotEnv))
-	override := getIdentityOverrideLocked()
+	override := identityFromContext(ctx)
+	if override == "" {
+		override = getIdentityOverrideLocked()
+	}
 	cacheKey := actorCacheKey{repoPath: repoPath, bot: botName, identity: override}
 
 	actorCacheMu.Lock()
