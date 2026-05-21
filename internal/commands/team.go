@@ -85,7 +85,12 @@ func newTeamCreateCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create <name>",
 		Short: "Create a new team",
-		Args:  cobra.ExactArgs(1),
+		Long: `Create a new team in the active profile's vault.
+
+Every team must have at least one admin to manage it, so the caller is
+automatically added as both a member and an admin. Use --member / --admin
+to add others alongside yourself.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
@@ -109,7 +114,8 @@ func newTeamCreateCommand() *cobra.Command {
 			// vaults, the server enforces org-admin. We resolve the
 			// actor up-front to surface "set git user.email" errors
 			// early rather than deep inside the transaction.
-			if _, err := v.CurrentActor(ctx); err != nil {
+			actor, err := v.CurrentActor(ctx)
+			if err != nil {
 				return err
 			}
 
@@ -128,6 +134,12 @@ func newTeamCreateCommand() *cobra.Command {
 				return err
 			}
 			status.Done("Created team " + team.Name)
+
+			// CreateTeam always adds the caller as member+admin so every
+			// team has at least one admin. Surface this so the user isn't
+			// surprised by a roster they didn't explicitly request.
+			out := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
+			out.Info(fmt.Sprintf("You (%s) were added as a member and admin — every team needs at least one admin.", actor.Email))
 			return nil
 		},
 	}
