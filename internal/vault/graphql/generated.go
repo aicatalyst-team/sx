@@ -533,18 +533,6 @@ type BotInstalledResponse struct {
 // GetBot returns BotInstalledResponse.Bot, and is useful for accessing the field via an interface.
 func (v *BotInstalledResponse) GetBot() BotInstalledBotManagedBot { return v.Bot }
 
-// An enumeration.
-type BotsBotStatusChoices string
-
-const (
-	// Active
-	BotsBotStatusChoicesActive BotsBotStatusChoices = "ACTIVE"
-)
-
-var AllBotsBotStatusChoices = []BotsBotStatusChoices{
-	BotsBotStatusChoicesActive,
-}
-
 // CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutation includes the requested fields of the GraphQL type CreateBotApiKeyMutation.
 type CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutation struct {
 	BotKey string `json:"botKey"`
@@ -876,7 +864,6 @@ type ListBotsBotsManagedBot struct {
 	Name        string                            `json:"name"`
 	Slug        string                            `json:"slug"`
 	Description string                            `json:"description"`
-	Status      BotsBotStatusChoices              `json:"status"`
 	Teams       []ListBotsBotsManagedBotTeamsTeam `json:"teams"`
 }
 
@@ -891,9 +878,6 @@ func (v *ListBotsBotsManagedBot) GetSlug() string { return v.Slug }
 
 // GetDescription returns ListBotsBotsManagedBot.Description, and is useful for accessing the field via an interface.
 func (v *ListBotsBotsManagedBot) GetDescription() string { return v.Description }
-
-// GetStatus returns ListBotsBotsManagedBot.Status, and is useful for accessing the field via an interface.
-func (v *ListBotsBotsManagedBot) GetStatus() BotsBotStatusChoices { return v.Status }
 
 // GetTeams returns ListBotsBotsManagedBot.Teams, and is useful for accessing the field via an interface.
 func (v *ListBotsBotsManagedBot) GetTeams() []ListBotsBotsManagedBotTeamsTeam { return v.Teams }
@@ -2299,7 +2283,6 @@ query ListBots {
 		name
 		slug
 		description
-		status
 		teams {
 			id
 			name
