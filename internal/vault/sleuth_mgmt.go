@@ -435,47 +435,27 @@ func (s *SleuthVault) CreateBot(ctx context.Context, bot mgmt.Bot) (string, erro
 	if err != nil {
 		return "", err
 	}
-	mutation := `mutation CreateBot($input: CreateBotInput!) {
-		createBot(input: $input) {
-			bot { id name slug }
-			botKey
-			errors { field messages }
-		}
-	}`
-	input := map[string]any{"name": bot.Name}
+	input := vaultgql.CreateBotInput{Name: bot.Name}
 	if bot.Description != "" {
-		input["description"] = bot.Description
+		input.Description = &bot.Description
 	}
 	if len(teamIDs) > 0 {
-		input["teamIds"] = teamIDs
+		input.TeamIds = teamIDs
 	}
-	vars := map[string]any{"input": input}
 	// createBot auto-issues a default API key on the server and returns
 	// the raw token under `botKey` (only available on this single
 	// response — there is no follow-up API to fetch it again). Capture
 	// it so the CLI can print it once; otherwise the auto-issued key
 	// would be wasted and the user would have to immediately call
 	// `sx bot key create` to get a usable token.
-	var resp struct {
-		Data struct {
-			CreateBot struct {
-				Bot    *sleuthBotNode        `json:"bot"`
-				BotKey string                `json:"botKey"`
-				Errors []sleuthMutationError `json:"errors"`
-			} `json:"createBot"`
-		} `json:"data"`
-		Errors []sleuthGraphQLError `json:"errors"`
-	}
-	if err := s.executeGraphQLQuery(ctx, mutation, vars, &resp); err != nil {
+	resp, err := vaultgql.CreateBot(ctx, s.gqlClient(), input)
+	if err != nil {
 		return "", err
 	}
-	if err := sleuthErrorsToErr(resp.Errors); err != nil {
-		return "", err
+	if resp.CreateBot == nil {
+		return "", errors.New("missing createBot payload in response")
 	}
-	if err := sleuthMutationErrorsToErr(resp.Data.CreateBot.Errors); err != nil {
-		return "", err
-	}
-	return resp.Data.CreateBot.BotKey, nil
+	return resp.CreateBot.BotKey, nil
 }
 
 func (s *SleuthVault) UpdateBot(ctx context.Context, bot mgmt.Bot) error {

@@ -547,33 +547,11 @@ var AllBotsBotStatusChoices = []BotsBotStatusChoices{
 
 // CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutation includes the requested fields of the GraphQL type CreateBotApiKeyMutation.
 type CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutation struct {
-	BotKey *string                                                                `json:"botKey"`
-	Errors []CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutationErrorsErrorType `json:"errors"`
+	BotKey string `json:"botKey"`
 }
 
 // GetBotKey returns CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutation.BotKey, and is useful for accessing the field via an interface.
-func (v *CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutation) GetBotKey() *string { return v.BotKey }
-
-// GetErrors returns CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutation.Errors, and is useful for accessing the field via an interface.
-func (v *CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutation) GetErrors() []CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutationErrorsErrorType {
-	return v.Errors
-}
-
-// CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutationErrorsErrorType includes the requested fields of the GraphQL type ErrorType.
-type CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutationErrorsErrorType struct {
-	Field    string   `json:"field"`
-	Messages []string `json:"messages"`
-}
-
-// GetField returns CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutationErrorsErrorType.Field, and is useful for accessing the field via an interface.
-func (v *CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutationErrorsErrorType) GetField() string {
-	return v.Field
-}
-
-// GetMessages returns CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutationErrorsErrorType.Messages, and is useful for accessing the field via an interface.
-func (v *CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutationErrorsErrorType) GetMessages() []string {
-	return v.Messages
-}
+func (v *CreateBotApiKeyCreateBotApiKeyCreateBotApiKeyMutation) GetBotKey() string { return v.BotKey }
 
 // CreateBotApiKeyResponse is returned by CreateBotApiKey on success.
 type CreateBotApiKeyResponse struct {
@@ -587,9 +565,8 @@ func (v *CreateBotApiKeyResponse) GetCreateBotApiKey() *CreateBotApiKeyCreateBot
 
 // CreateBotCreateBotCreateBotMutation includes the requested fields of the GraphQL type CreateBotMutation.
 type CreateBotCreateBotCreateBotMutation struct {
-	Bot    *CreateBotCreateBotCreateBotMutationBotManagedBot    `json:"bot"`
-	BotKey *string                                              `json:"botKey"`
-	Errors []CreateBotCreateBotCreateBotMutationErrorsErrorType `json:"errors"`
+	Bot    *CreateBotCreateBotCreateBotMutationBotManagedBot `json:"bot"`
+	BotKey string                                            `json:"botKey"`
 }
 
 // GetBot returns CreateBotCreateBotCreateBotMutation.Bot, and is useful for accessing the field via an interface.
@@ -598,12 +575,7 @@ func (v *CreateBotCreateBotCreateBotMutation) GetBot() *CreateBotCreateBotCreate
 }
 
 // GetBotKey returns CreateBotCreateBotCreateBotMutation.BotKey, and is useful for accessing the field via an interface.
-func (v *CreateBotCreateBotCreateBotMutation) GetBotKey() *string { return v.BotKey }
-
-// GetErrors returns CreateBotCreateBotCreateBotMutation.Errors, and is useful for accessing the field via an interface.
-func (v *CreateBotCreateBotCreateBotMutation) GetErrors() []CreateBotCreateBotCreateBotMutationErrorsErrorType {
-	return v.Errors
-}
+func (v *CreateBotCreateBotCreateBotMutation) GetBotKey() string { return v.BotKey }
 
 // CreateBotCreateBotCreateBotMutationBotManagedBot includes the requested fields of the GraphQL type ManagedBot.
 type CreateBotCreateBotCreateBotMutationBotManagedBot struct {
@@ -620,20 +592,6 @@ func (v *CreateBotCreateBotCreateBotMutationBotManagedBot) GetName() string { re
 
 // GetSlug returns CreateBotCreateBotCreateBotMutationBotManagedBot.Slug, and is useful for accessing the field via an interface.
 func (v *CreateBotCreateBotCreateBotMutationBotManagedBot) GetSlug() string { return v.Slug }
-
-// CreateBotCreateBotCreateBotMutationErrorsErrorType includes the requested fields of the GraphQL type ErrorType.
-type CreateBotCreateBotCreateBotMutationErrorsErrorType struct {
-	Field    string   `json:"field"`
-	Messages []string `json:"messages"`
-}
-
-// GetField returns CreateBotCreateBotCreateBotMutationErrorsErrorType.Field, and is useful for accessing the field via an interface.
-func (v *CreateBotCreateBotCreateBotMutationErrorsErrorType) GetField() string { return v.Field }
-
-// GetMessages returns CreateBotCreateBotCreateBotMutationErrorsErrorType.Messages, and is useful for accessing the field via an interface.
-func (v *CreateBotCreateBotCreateBotMutationErrorsErrorType) GetMessages() []string {
-	return v.Messages
-}
 
 type CreateBotInput struct {
 	Name        string   `json:"name"`
@@ -2041,10 +1999,6 @@ mutation CreateBot ($input: CreateBotInput!) {
 			slug
 		}
 		botKey
-		errors {
-			field
-			messages
-		}
 	}
 }
 `
@@ -2079,10 +2033,6 @@ const CreateBotApiKey_Operation = `
 mutation CreateBotApiKey ($botId: ID!, $label: String) {
 	createBotApiKey(botId: $botId, label: $label) {
 		botKey
-		errors {
-			field
-			messages
-		}
 	}
 }
 `
