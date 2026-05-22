@@ -568,32 +568,16 @@ func (s *SleuthVault) resolveTeamGIDs(ctx context.Context, names []string) ([]st
 // assets search. Used for installSkillToBot/uninstallSkillFromBot, which
 // take skill GIDs rather than slugs.
 func (s *SleuthVault) assetGIDByName(ctx context.Context, name string) (string, error) {
-	query := `query AssetGID($search: String!) {
-		vault { assets(search: $search, first: 25) { nodes { id name } } }
-	}`
-	vars := map[string]any{"search": name}
-	var resp struct {
-		Data struct {
-			Vault struct {
-				Assets struct {
-					Nodes []struct {
-						ID   string `json:"id"`
-						Name string `json:"name"`
-					} `json:"nodes"`
-				} `json:"assets"`
-			} `json:"vault"`
-		} `json:"data"`
-		Errors []sleuthGraphQLError `json:"errors"`
-	}
-	if err := s.executeGraphQLQuery(ctx, query, vars, &resp); err != nil {
+	resp, err := vaultgql.AssetGID(ctx, s.gqlClient(), name)
+	if err != nil {
 		return "", err
 	}
-	if err := sleuthErrorsToErr(resp.Errors); err != nil {
-		return "", err
-	}
-	for _, n := range resp.Data.Vault.Assets.Nodes {
-		if n.Name == name {
-			return n.ID, nil
+	// VaultAsset is a GraphQL interface with concrete subtypes
+	// (Skill, MCP, Agent, ClaudeCodePlugin, ...). Use the interface
+	// getters to avoid switching on every variant.
+	for _, n := range resp.Vault.Assets.Nodes {
+		if n.GetName() == name {
+			return n.GetId(), nil
 		}
 	}
 	return "", fmt.Errorf("asset %q not found", name)
