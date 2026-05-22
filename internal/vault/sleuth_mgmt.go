@@ -1131,6 +1131,13 @@ type gqlErrItemPtr[T any] interface {
 // gqlMutationErrors converts a generated mutation's `errors { field messages }`
 // slice into the existing sleuthMutationError shape so all call sites can keep
 // using sleuthMutationErrorsToErr for consistent error formatting.
+//
+// Shape assumption: this helper only works for mutations whose payload type
+// exposes `errors: [ErrorType!]!` where ErrorType has `field: String` and
+// `messages: [String!]!`. If a future mutation deviates (e.g. a non-list
+// `error: ErrorType` or a renamed field), the call site simply won't satisfy
+// gqlErrItemPtr and won't compile — by design. Either reshape the operation
+// to match, or write a dedicated handler at the call site.
 func gqlMutationErrors[T any, PT gqlErrItemPtr[T]](errs []T) error {
 	if len(errs) == 0 {
 		return nil
