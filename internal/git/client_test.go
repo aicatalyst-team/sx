@@ -5,8 +5,53 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// TestLsRemote_ClassifiesRealGitErrors runs real `git ls-remote` against
+// failing targets and verifies the error goes through classifyRemoteError —
+// i.e. the user sees a friendly message ("repository not found",
+// "authentication required") rather than raw git output. This is the
+// regression guard for the silent-hang bug: if the classifier ever gets
+// disconnected from the call path, these tests fail.
+func TestLsRemote_ClassifiesRealGitErrors(t *testing.T) {
+	client := &Client{}
+	ctx := context.Background()
+
+	t.Run("nonexistent local path is classified as not-found", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "does-not-exist")
+		_, err := client.LsRemote(ctx, missing, "HEAD")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		msg := err.Error()
+		// Strict assertion: must hit the "not found" branch of the
+		// classifier. The fallback branch would mean classification
+		// silently broke — if a new git version phrases the error
+		// differently, fix the classifier substring list, not the test.
+		if !strings.Contains(msg, "repository not found") {
+			t.Errorf("error not classified as not-found: %s", msg)
+		}
+		if !strings.Contains(msg, missing) {
+			t.Errorf("error should mention the URL %q, got: %s", missing, msg)
+		}
+	})
+
+	t.Run("bogus hostname is classified as network error", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip("skipping DNS-touching test in short mode")
+		}
+		_, err := client.LsRemote(ctx, "https://invalid.localhost.invalid/x.git", "HEAD")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "network error") {
+			t.Errorf("error not classified as network error: %s", msg)
+		}
+	})
+}
 
 func TestIsEmpty(t *testing.T) {
 	t.Run("empty cloned repo", func(t *testing.T) {

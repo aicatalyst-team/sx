@@ -102,6 +102,8 @@ func runVaultList(cmd *cobra.Command, typeFilter string, jsonOutput, installedOn
 	// Only show status for text output (not JSON)
 	var status *components.Status
 	if !jsonOutput {
+		uiOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
+		uiOut.Info("Source: " + describeVaultSource(cfg))
 		status = components.NewStatus(cmd.OutOrStdout())
 		if installedOnly {
 			status.Start("Loading installed assets")
@@ -161,6 +163,23 @@ func runVaultList(cmd *cobra.Command, typeFilter string, jsonOutput, installedOn
 		return printVaultListJSON(out, result, typeFilter)
 	}
 	return printVaultListText(out, result, lf, typeFilter)
+}
+
+// describeVaultSource returns a short, human-readable string describing
+// where the vault's assets come from. Used at the top of `sx vault list`
+// so users can tell at a glance whether they're hitting Skills.new, a
+// Git repo, or a local directory.
+func describeVaultSource(cfg *config.Config) string {
+	switch cfg.Type {
+	case config.RepositoryTypeSleuth:
+		return fmt.Sprintf("Skills.new (%s)", cfg.GetServerURL())
+	case config.RepositoryTypeGit:
+		return fmt.Sprintf("Git repository (%s)", cfg.RepositoryURL)
+	case config.RepositoryTypePath:
+		return fmt.Sprintf("Local path (%s)", cfg.RepositoryURL)
+	default:
+		return string(cfg.Type)
+	}
 }
 
 func runVaultShow(cmd *cobra.Command, assetName string, jsonOutput bool) error {

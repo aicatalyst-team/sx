@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +16,7 @@ import (
 	"github.com/sleuth-io/sx/internal/bootstrap"
 	"github.com/sleuth-io/sx/internal/clients"
 	"github.com/sleuth-io/sx/internal/config"
+	"github.com/sleuth-io/sx/internal/git"
 	"github.com/sleuth-io/sx/internal/ui"
 	"github.com/sleuth-io/sx/internal/ui/components"
 	"github.com/sleuth-io/sx/internal/utils"
@@ -408,28 +410,69 @@ func authenticateSleuth(cmd *cobra.Command, ctx context.Context, serverURL strin
 	return nil
 }
 
+// repoVerifier reports whether a git repo URL is reachable for the current
+// user. Returning nil means "reachable"; any error is shown to the user.
+// Extracted as a seam so tests can inject canned remote responses without
+// touching the network.
+type repoVerifier func(ctx context.Context, repoURL string) error
+
+// defaultRepoVerifier verifies a repo URL by running `git ls-remote HEAD`.
+// This is the production verifier used by initGitRepository.
+func defaultRepoVerifier(ctx context.Context, repoURL string) error {
+	_, err := git.NewClient().LsRemote(ctx, repoURL, "HEAD")
+	return err
+}
+
 // initGitRepository initializes Git repository configuration
 func initGitRepository(cmd *cobra.Command, ctx context.Context, enabledClients []string, existingCfg *config.Config) error {
 	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
 	styledOut.Newline()
+	styledOut.Info("Accepts any URL git clone supports. Examples:")
+	styledOut.Info("  SSH:   git@github.com:owner/repo.git  (recommended)")
+	styledOut.Info("  HTTPS: https://github.com/owner/repo.git")
 
-	// Pre-populate with existing Git URL if available
-	var repoURL string
-	var err error
+	defaultURL := ""
 	if existingCfg != nil && existingCfg.Type == config.RepositoryTypeGit && existingCfg.RepositoryURL != "" {
-		repoURL, err = components.InputWithDefault("Enter Git repository URL", existingCfg.RepositoryURL)
-	} else {
-		repoURL, err = components.Input("Enter Git repository URL")
+		defaultURL = existingCfg.RepositoryURL
 	}
+
+	repoURL, err := promptForValidGitURL(ctx, defaultURL, os.Stdin, cmd.OutOrStdout(), defaultRepoVerifier)
 	if err != nil {
 		return err
 	}
-
-	if repoURL == "" {
-		return errors.New("repository URL is required")
-	}
-
 	return configureGitRepo(cmd, ctx, repoURL, enabledClients)
+}
+
+// promptForValidGitURL asks the user for a git repo URL, runs verify() on it,
+// and on failure offers to retry with a different URL. Loops until verify
+// succeeds, the user declines to retry, or input fails. The verify seam keeps
+// the loop logic testable without real network or git invocations.
+func promptForValidGitURL(ctx context.Context, defaultURL string, in io.Reader, out io.Writer, verify repoVerifier) (string, error) {
+	styledOut := ui.NewOutput(out, out)
+	for {
+		repoURL, err := components.InputWithIO("Enter Git repository URL", "", defaultURL, in, out)
+		if err != nil {
+			return "", err
+		}
+		if repoURL == "" {
+			return "", errors.New("repository URL is required")
+		}
+
+		styledOut.Info("Verifying repository access...")
+		if vErr := verify(ctx, repoURL); vErr != nil {
+			styledOut.Error(fmt.Sprintf("Cannot access %s: %v", repoURL, vErr))
+			retry, cerr := components.ConfirmWithIO("Try a different URL?", true, in, out)
+			if cerr != nil {
+				return "", cerr
+			}
+			if !retry {
+				return "", errors.New("init aborted: repository URL unreachable")
+			}
+			defaultURL = repoURL
+			continue
+		}
+		return repoURL, nil
+	}
 }
 
 // configureGitRepo configures a Git repository
