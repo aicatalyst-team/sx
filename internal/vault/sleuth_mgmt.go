@@ -62,46 +62,40 @@ const sleuthTeamListPageSize = 1000
 // server. ListTeams projects these to mgmt.Team; teamGIDByName scans for
 // a single row — keeping a single query text in one place.
 func (s *SleuthVault) listTeamNodes(ctx context.Context) ([]sleuthTeamNode, error) {
-	query := `query ListTeams($first: Int!) {
-		teams(first: $first) {
-			nodes {
-				id
-				name
-				adminMemberIds
-				members(first: $first) { nodes { id email } }
-				skillsRepositories { repositoryId }
-			}
+	resp, err := vaultgql.ListTeams(ctx, s.gqlClient(), sleuthTeamListPageSize)
+	if err != nil {
+		return nil, err
+	}
+	gqlNodes := resp.Organization.Teams.Nodes
+	nodes := make([]sleuthTeamNode, len(gqlNodes))
+	for i, n := range gqlNodes {
+		node := sleuthTeamNode{
+			ID:             n.Id,
+			Name:           n.Name,
+			AdminMemberIDs: n.AdminMemberIds,
 		}
-	}`
-	vars := map[string]any{"first": sleuthTeamListPageSize}
-	var resp struct {
-		Data struct {
-			Teams struct {
-				Nodes []sleuthTeamNode `json:"nodes"`
-			} `json:"teams"`
-		} `json:"data"`
-		Errors []sleuthGraphQLError `json:"errors"`
+		for _, m := range n.Members.Nodes {
+			node.Members = append(node.Members, sleuthTeamMember{ID: m.Id, Email: m.Email})
+		}
+		for _, r := range n.SkillsRepositories {
+			node.SkillsRepositories = append(node.SkillsRepositories, sleuthSkillsRepoRef{RepositoryID: r.RepositoryId})
+		}
+		nodes[i] = node
 	}
-	if err := s.executeGraphQLQuery(ctx, query, vars, &resp); err != nil {
-		return nil, err
-	}
-	if err := sleuthErrorsToErr(resp.Errors); err != nil {
-		return nil, err
-	}
-	if len(resp.Data.Teams.Nodes) >= sleuthTeamListPageSize {
+	if len(nodes) >= sleuthTeamListPageSize {
 		logger.Get().Warn("ListTeams result saturated page size; some teams may be truncated",
 			"page_size", sleuthTeamListPageSize,
-			"returned", len(resp.Data.Teams.Nodes))
+			"returned", len(nodes))
 	}
-	for _, node := range resp.Data.Teams.Nodes {
-		if len(node.Members.Nodes) >= sleuthTeamListPageSize {
+	for _, node := range nodes {
+		if len(node.Members) >= sleuthTeamListPageSize {
 			logger.Get().Warn("team member list saturated page size; some members may be truncated",
 				"team", node.Name,
 				"page_size", sleuthTeamListPageSize,
-				"returned", len(node.Members.Nodes))
+				"returned", len(node.Members))
 		}
 	}
-	return resp.Data.Teams.Nodes, nil
+	return nodes, nil
 }
 
 func (s *SleuthVault) GetTeam(ctx context.Context, name string) (*mgmt.Team, error) {
@@ -949,19 +943,26 @@ func sleuthAuditMatches(ev mgmt.AuditEvent, f mgmt.AuditFilter) bool {
 
 // ---- helpers ----
 
+type sleuthTeamMember struct {
+	ID    string
+	Email string
+}
+
+type sleuthSkillsRepoRef struct {
+	RepositoryID string
+}
+
+// sleuthTeamNode is the in-memory shape used by listTeamNodes consumers
+// (ListTeams, GetTeam, teamGIDByName, etc.). Populated from the generated
+// ListTeams response — see listTeamNodes for the conversion. Field shape
+// no longer needs to mirror the GraphQL wire format since genqlient
+// handles unmarshaling.
 type sleuthTeamNode struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	AdminMemberIDs []string `json:"adminMemberIds"`
-	Members        struct {
-		Nodes []struct {
-			ID    string `json:"id"`
-			Email string `json:"email"`
-		} `json:"nodes"`
-	} `json:"members"`
-	SkillsRepositories []struct {
-		RepositoryID string `json:"repositoryId"`
-	} `json:"skillsRepositories"`
+	ID                 string
+	Name               string
+	AdminMemberIDs     []string
+	Members            []sleuthTeamMember
+	SkillsRepositories []sleuthSkillsRepoRef
 }
 
 type sleuthGraphQLError struct {
@@ -975,14 +976,14 @@ type sleuthMutationError struct {
 
 func sleuthTeamToMgmt(node sleuthTeamNode) mgmt.Team {
 	team := mgmt.Team{Name: node.Name}
-	for _, m := range node.Members.Nodes {
+	for _, m := range node.Members {
 		team.Members = append(team.Members, mgmt.NormalizeEmail(m.Email))
 	}
 	adminIDs := make(map[string]struct{}, len(node.AdminMemberIDs))
 	for _, id := range node.AdminMemberIDs {
 		adminIDs[id] = struct{}{}
 	}
-	for _, m := range node.Members.Nodes {
+	for _, m := range node.Members {
 		if _, ok := adminIDs[m.ID]; ok {
 			team.Admins = append(team.Admins, mgmt.NormalizeEmail(m.Email))
 		}
