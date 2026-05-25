@@ -473,19 +473,49 @@ func (s *SleuthVault) RenameAsset(ctx context.Context, oldName, newName string) 
 	return nil
 }
 
-// assetTypeToGraphQL maps local asset type keys to GraphQL AssetType enum values.
-// Returns empty string for types not supported by the backend.
-func assetTypeToGraphQL(typeKey string) string {
-	mapping := map[string]string{
-		"skill":              "SKILL",
-		"mcp":                "MCP",
-		"agent":              "AGENT",
-		"command":            "COMMAND",
-		"hook":               "HOOK",
-		"rule":               "RULE",
-		"claude-code-plugin": "CLAUDE_CODE_PLUGIN",
+// sxAssetTypeToGQL maps sx's internal asset.Type to the generated
+// vaultgql.AssetType enum. Returns the zero AssetType (empty string) for
+// asset kinds the backend doesn't model — callers should skip those.
+func sxAssetTypeToGQL(t asset.Type) vaultgql.AssetType {
+	switch t.Key {
+	case asset.TypeSkill.Key:
+		return vaultgql.AssetTypeSkill
+	case asset.TypeMCP.Key:
+		return vaultgql.AssetTypeMcp
+	case asset.TypeAgent.Key:
+		return vaultgql.AssetTypeAgent
+	case asset.TypeCommand.Key:
+		return vaultgql.AssetTypeCommand
+	case asset.TypeHook.Key:
+		return vaultgql.AssetTypeHook
+	case asset.TypeRule.Key:
+		return vaultgql.AssetTypeRule
+	case asset.TypeClaudeCodePlugin.Key:
+		return vaultgql.AssetTypeClaudeCodePlugin
 	}
-	return mapping[typeKey]
+	return ""
+}
+
+// gqlAssetTypeToSX is the inverse of sxAssetTypeToGQL. Returns the zero
+// asset.Type for unknown enum values so callers can detect via IsValid().
+func gqlAssetTypeToSX(t vaultgql.AssetType) asset.Type {
+	switch t {
+	case vaultgql.AssetTypeSkill:
+		return asset.TypeSkill
+	case vaultgql.AssetTypeMcp:
+		return asset.TypeMCP
+	case vaultgql.AssetTypeAgent:
+		return asset.TypeAgent
+	case vaultgql.AssetTypeCommand:
+		return asset.TypeCommand
+	case vaultgql.AssetTypeHook:
+		return asset.TypeHook
+	case vaultgql.AssetTypeRule:
+		return asset.TypeRule
+	case vaultgql.AssetTypeClaudeCodePlugin:
+		return asset.TypeClaudeCodePlugin
+	}
+	return asset.Type{Key: string(t)}
 }
 
 // ListAssets retrieves a list of all assets in the vault using GraphQL
@@ -496,7 +526,7 @@ func (s *SleuthVault) ListAssets(ctx context.Context, opts ListAssetsOptions) (*
 		var lastErr error
 		for _, t := range asset.AllTypes() {
 			// Skip types not supported by the backend
-			if assetTypeToGraphQL(t.Key) == "" {
+			if sxAssetTypeToGQL(t) == "" {
 				continue
 			}
 			typeOpts := ListAssetsOptions{
@@ -531,92 +561,41 @@ func (s *SleuthVault) listAssetsByType(ctx context.Context, opts ListAssetsOptio
 		limit = 50
 	}
 
-	gqlType := assetTypeToGraphQL(opts.Type)
+	gqlType := sxAssetTypeToGQL(asset.FromString(opts.Type))
 	if gqlType == "" {
 		// Type not supported by backend, return empty result
 		return &ListAssetsResult{Assets: []AssetSummary{}}, nil
 	}
 
-	variables := map[string]any{
-		"first": limit,
-		"type":  gqlType,
-	}
-
-	// Build query - type is always required
-	queryParams := "$first: Int, $type: AssetType!"
-	assetArgs := "first: $first, type: $type"
-
+	var searchPtr *string
 	if opts.Search != "" {
-		queryParams += ", $search: String"
-		assetArgs += ", search: $search"
-		variables["search"] = opts.Search
+		searchPtr = &opts.Search
 	}
 
-	query := fmt.Sprintf(`query VaultAssets(%s) {
-		vault {
-			assets(%s) {
-				nodes {
-					slug
-					type
-					latestVersion
-					versionsCount
-					description
-					createdAt
-					updatedAt
-				}
-			}
-		}
-	}`, queryParams, assetArgs)
-
-	// Make GraphQL request
-	var gqlResp struct {
-		Data struct {
-			Vault struct {
-				Assets struct {
-					Nodes []struct {
-						Slug          string    `json:"slug"`
-						Type          string    `json:"type"`
-						LatestVersion string    `json:"latestVersion"`
-						VersionsCount int       `json:"versionsCount"`
-						Description   string    `json:"description"`
-						CreatedAt     time.Time `json:"createdAt"`
-						UpdatedAt     time.Time `json:"updatedAt"`
-					} `json:"nodes"`
-				} `json:"assets"`
-			} `json:"vault"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	if err := s.executeGraphQLQuery(ctx, query, variables, &gqlResp); err != nil {
+	resp, err := vaultgql.VaultAssets(ctx, s.gqlClient(), &limit, gqlType, searchPtr)
+	if err != nil {
 		return nil, err
 	}
 
-	if len(gqlResp.Errors) > 0 {
-		return nil, fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
-	}
-
-	// Convert to result struct
+	// Convert to result struct. VaultAsset is a polymorphic interface;
+	// shared getters cover every concrete subtype (Skill, MCP, Agent, ...).
 	result := &ListAssetsResult{
-		Assets: make([]AssetSummary, 0, len(gqlResp.Data.Vault.Assets.Nodes)),
+		Assets: make([]AssetSummary, 0, len(resp.Vault.Assets.Nodes)),
 	}
-
-	for _, node := range gqlResp.Data.Vault.Assets.Nodes {
-		assetType := asset.FromString(strings.ToLower(node.Type))
+	for _, node := range resp.Vault.Assets.Nodes {
+		assetType := gqlAssetTypeToSX(node.GetType())
 		if !assetType.IsValid() {
 			log := logger.Get()
-			log.Warn("unknown asset type from GraphQL", "type", node.Type, "asset", node.Slug)
+			log.Warn("unknown asset type from GraphQL", "type", string(node.GetType()), "asset", node.GetSlug())
 		}
 		result.Assets = append(result.Assets, AssetSummary{
-			Name:          node.Slug,
+			Name:          node.GetSlug(),
 			Type:          assetType,
-			LatestVersion: node.LatestVersion,
-			VersionsCount: node.VersionsCount,
-			Description:   node.Description,
-			CreatedAt:     node.CreatedAt,
-			UpdatedAt:     node.UpdatedAt,
+			LatestVersion: node.GetLatestVersion(),
+			VersionsCount: node.GetVersionsCount(),
+			Description:   node.GetDescription(),
+			CreatedAt:     node.GetCreatedAt(),
+			UpdatedAt:     node.GetUpdatedAt(),
 		})
 	}
 
@@ -625,98 +604,36 @@ func (s *SleuthVault) listAssetsByType(ctx context.Context, opts ListAssetsOptio
 
 // GetAssetDetails retrieves detailed information about a specific asset using GraphQL
 func (s *SleuthVault) GetAssetDetails(ctx context.Context, name string) (*AssetDetails, error) {
-	// Search for the asset by name using the assets connection
-	query := `query VaultAsset($search: String!) {
-		vault {
-			assets(search: $search, first: 10) {
-				nodes {
-					name
-					type
-					description
-					createdAt
-					updatedAt
-					versions {
-						version
-						createdAt
-						filesCount
-					}
-				}
-			}
-		}
-	}`
-
-	variables := map[string]any{
-		"search": name,
-	}
-
-	// Make GraphQL request
-	var gqlResp struct {
-		Data struct {
-			Vault struct {
-				Assets struct {
-					Nodes []struct {
-						Name        string    `json:"name"`
-						Type        string    `json:"type"`
-						Description string    `json:"description"`
-						CreatedAt   time.Time `json:"createdAt"`
-						UpdatedAt   time.Time `json:"updatedAt"`
-						Versions    []struct {
-							Version    string    `json:"version"`
-							CreatedAt  time.Time `json:"createdAt"`
-							FilesCount int       `json:"filesCount"`
-						} `json:"versions"`
-					} `json:"nodes"`
-				} `json:"assets"`
-			} `json:"vault"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	if err := s.executeGraphQLQuery(ctx, query, variables, &gqlResp); err != nil {
+	resp, err := vaultgql.VaultAssetsByName(ctx, s.gqlClient(), name)
+	if err != nil {
 		return nil, err
 	}
 
-	if len(gqlResp.Errors) > 0 {
-		return nil, fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
-	}
-
-	// Find exact match by name
-	var assetData *struct {
-		Name        string    `json:"name"`
-		Type        string    `json:"type"`
-		Description string    `json:"description"`
-		CreatedAt   time.Time `json:"createdAt"`
-		UpdatedAt   time.Time `json:"updatedAt"`
-		Versions    []struct {
-			Version    string    `json:"version"`
-			CreatedAt  time.Time `json:"createdAt"`
-			FilesCount int       `json:"filesCount"`
-		} `json:"versions"`
-	}
-	for i, node := range gqlResp.Data.Vault.Assets.Nodes {
-		if node.Name == name {
-			assetData = &gqlResp.Data.Vault.Assets.Nodes[i]
+	// Find exact match by name. VaultAsset is a polymorphic interface
+	// (Skill/MCP/Agent/...); the shared getters cover every concrete subtype
+	// so we don't switch on type here.
+	var match vaultgql.VaultAssetsByNameVaultAssetsVaultAssetsConnectionNodesVaultAsset
+	for _, node := range resp.Vault.Assets.Nodes {
+		if node.GetName() == name {
+			match = node
 			break
 		}
 	}
-
-	if assetData == nil {
+	if match == nil {
 		return nil, fmt.Errorf("asset '%s' not found", name)
 	}
 
-	// Convert to result struct
+	versions := match.GetVersions()
 	details := &AssetDetails{
-		Name:        assetData.Name,
-		Type:        asset.FromString(assetData.Type),
-		Description: assetData.Description,
-		CreatedAt:   assetData.CreatedAt,
-		UpdatedAt:   assetData.UpdatedAt,
-		Versions:    make([]AssetVersion, 0, len(assetData.Versions)),
+		Name:        match.GetName(),
+		Type:        gqlAssetTypeToSX(match.GetType()),
+		Description: match.GetDescription(),
+		CreatedAt:   match.GetCreatedAt(),
+		UpdatedAt:   match.GetUpdatedAt(),
+		Versions:    make([]AssetVersion, 0, len(versions)),
 	}
 
-	for _, v := range assetData.Versions {
+	for _, v := range versions {
 		details.Versions = append(details.Versions, AssetVersion{
 			Version:    v.Version,
 			CreatedAt:  v.CreatedAt,

@@ -1,0 +1,18 @@
+query VaultAssetsByName($search: String!) {
+  vault {
+    assets(search: $search, first: 10) {
+      nodes {
+        name
+        type
+        description
+        createdAt
+        updatedAt
+        versions {
+          version
+          createdAt
+          filesCount
+        }
+      }
+    }
+  }
+}

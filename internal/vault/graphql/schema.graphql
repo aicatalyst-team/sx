@@ -3139,7 +3139,7 @@ interface VaultAsset {
 type VaultAssetVersion {
   version: String!
   isActive: Boolean!
-  createdAt: DateTime
+  createdAt: DateTime!
   createdByName: String
   filesCount: Int!
   changeSummary: String!

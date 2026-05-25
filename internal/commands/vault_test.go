@@ -1035,6 +1035,30 @@ type mockGraphQLServerOptions struct {
 	graphQLError string // If set, return this error instead of assets
 }
 
+// graphQLTypenameForAssetType maps the AssetType enum value sent in the
+// query variable to the concrete GraphQL object-type name. genqlient's
+// polymorphic deserializer requires __typename to dispatch to the right
+// Go struct.
+func graphQLTypenameForAssetType(assetType string) string {
+	switch assetType {
+	case "SKILL":
+		return "Skill"
+	case "MCP":
+		return "McpServer"
+	case "AGENT":
+		return "Agent"
+	case "COMMAND":
+		return "Command"
+	case "HOOK":
+		return "Hook"
+	case "RULE":
+		return "Rule"
+	case "CLAUDE_CODE_PLUGIN":
+		return "ClaudeCodePlugin"
+	}
+	return ""
+}
+
 // mockGraphQLServer creates a test server that responds to GraphQL queries for vault assets
 func mockGraphQLServer(t *testing.T, opts mockGraphQLServerOptions) *httptest.Server {
 	t.Helper()
@@ -1059,11 +1083,21 @@ func mockGraphQLServer(t *testing.T, opts mockGraphQLServerOptions) *httptest.Se
 			}
 
 			variables, _ := reqBody["variables"].(map[string]any)
-			assetType, _ := variables["type"].(string)
+			assetType, _ := variables["assetType"].(string)
 
 			nodes := opts.assetsByType[assetType]
 			if nodes == nil {
 				nodes = []map[string]any{}
+			}
+
+			// genqlient's polymorphic unmarshaler dispatches concrete VaultAsset
+			// subtypes via __typename; inject it from the requested assetType so
+			// individual test cases don't have to repeat it on every node.
+			typename := graphQLTypenameForAssetType(assetType)
+			for _, n := range nodes {
+				if _, ok := n["__typename"]; !ok {
+					n["__typename"] = typename
+				}
 			}
 
 			json.NewEncoder(w).Encode(map[string]any{
@@ -1278,9 +1312,16 @@ func TestVaultListWithGraphQL(t *testing.T) {
 
 		err := cmd.Execute()
 
-		expectedErr := "failed to list assets: GraphQL error: Authentication required"
-		if err == nil || err.Error() != expectedErr {
-			t.Errorf("Expected error %q, got: %v", expectedErr, err)
+		// genqlient wraps top-level GraphQL errors with gqlerror.List, which
+		// appends a trailing newline to its formatted string. Trim before
+		// comparing so we're not asserting on that quirk.
+		expectedErr := "failed to list assets: input: Authentication required"
+		var got string
+		if err != nil {
+			got = strings.TrimSpace(err.Error())
+		}
+		if err == nil || got != expectedErr {
+			t.Errorf("Expected error %q, got: %q", expectedErr, got)
 		}
 	})
 }

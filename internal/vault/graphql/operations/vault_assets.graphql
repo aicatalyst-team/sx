@@ -1,0 +1,15 @@
+query VaultAssets($first: Int, $assetType: AssetType!, $search: String) {
+  vault {
+    assets(first: $first, type: $assetType, search: $search) {
+      nodes {
+        slug
+        type
+        latestVersion
+        versionsCount
+        description
+        createdAt
+        updatedAt
+      }
+    }
+  }
+}
