@@ -857,87 +857,50 @@ func (s *SleuthVault) executeGraphQLQuery(ctx context.Context, query string, var
 
 // SetInstallations sets the installation scopes for an asset using GraphQL mutation
 func (s *SleuthVault) SetInstallations(ctx context.Context, asset *lockfile.Asset, scopeEntity string) error {
-	mutation := `mutation SetAssetInstallations($input: SetAssetInstallationsInput!) {
-		setAssetInstallations(input: $input) {
-			asset {
-				name
-				latestVersion
-			}
-			errors {
-				field
-				messages
-			}
-		}
-	}`
-
-	// Build repositories list from asset scopes
-	var repositories []map[string]any
-
+	// Build repositories list from asset scopes. Empty slice means global install
+	// (server interprets repositories=[] as org-wide when personalOnly is false).
+	var repositories []vaultgql.RepositoryInstallationInput
 	if asset.IsGlobal() {
-		// Empty array for global installation
-		repositories = []map[string]any{}
+		repositories = []vaultgql.RepositoryInstallationInput{}
 	} else {
-		// Convert lockfile.Scope to repository installation format
 		for _, scope := range asset.Scopes {
-			repo := map[string]any{
-				"url": scope.Repo,
-			}
-			if len(scope.Paths) > 0 {
-				repo["paths"] = scope.Paths
-			}
-			repositories = append(repositories, repo)
+			repositories = append(repositories, vaultgql.RepositoryInstallationInput{
+				Url:   scope.Repo,
+				Paths: scope.Paths,
+			})
 		}
 	}
 
-	input := map[string]any{
-		"assetName":    asset.Name,
-		"assetVersion": asset.Version,
-		"repositories": repositories,
+	input := vaultgql.SetAssetInstallationsInput{
+		AssetName:    asset.Name,
+		AssetVersion: &asset.Version,
+		Repositories: repositories,
 	}
 	if scopeEntity == scopeEntityPersonal {
-		input["personalOnly"] = true
+		personalOnly := true
+		input.PersonalOnly = &personalOnly
 	}
 
-	variables := map[string]any{
-		"input": input,
+	resp, err := vaultgql.SetAssetInstallations(ctx, s.gqlClient(), input)
+	if err != nil {
+		// Preserve the friendly PERMISSION_DENIED message for the most
+		// common error mode (caller lacks write permission). The server
+		// surfaces it as a top-level GraphQL error string, which genqlient
+		// includes verbatim in the wrapped err.
+		if strings.Contains(err.Error(), "PERMISSION_DENIED") {
+			return fmt.Errorf("permission denied. Check that you have write permissions on %s", s.serverURL)
+		}
+		return err
 	}
-
-	var gqlResp struct {
-		Data struct {
-			SetAssetInstallations struct {
-				Asset *struct {
-					Name          string `json:"name"`
-					LatestVersion string `json:"latestVersion"`
-				} `json:"asset"`
-				Errors []struct {
-					Field    string   `json:"field"`
-					Messages []string `json:"messages"`
-				} `json:"errors"`
-			} `json:"setAssetInstallations"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
+	if resp.SetAssetInstallations == nil {
+		return errors.New("missing setAssetInstallations payload in response")
 	}
-
-	if err := s.executeGraphQLQuery(ctx, mutation, variables, &gqlResp); err != nil {
+	if err := gqlMutationErrors(resp.SetAssetInstallations.Errors); err != nil {
 		return err
 	}
 
-	if len(gqlResp.Errors) > 0 {
-		if gqlResp.Errors[0].Message == "PERMISSION_DENIED" {
-			return fmt.Errorf("permission denied. Check that you have write permissions on %s", s.serverURL)
-		}
-		return fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
-	}
-
-	if len(gqlResp.Data.SetAssetInstallations.Errors) > 0 {
-		err := gqlResp.Data.SetAssetInstallations.Errors[0]
-		return fmt.Errorf("%s: %s", err.Field, err.Messages[0])
-	}
-
-	// Invalidate lock file cache so next GetLockFile fetches fresh data
-	// This is best-effort - ignore errors
+	// Invalidate lock file cache so next GetLockFile fetches fresh data.
+	// This is best-effort - ignore errors.
 	_ = cache.InvalidateLockFileCache(s.serverURL)
 
 	return nil
