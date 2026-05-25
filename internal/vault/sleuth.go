@@ -422,64 +422,31 @@ func (s *SleuthVault) PostUsageStats(ctx context.Context, jsonlData string) erro
 // RemoveAsset removes an asset from the Sleuth server's lock file.
 // The delete flag is passed to the server mutation for permanent deletion.
 func (s *SleuthVault) RemoveAsset(ctx context.Context, assetName, version string, delete bool) error {
-	// Use removeAssetInstallations mutation to clear all installations
-	mutation := `mutation RemoveAssetInstallations($input: RemoveAssetInstallationsInput!) {
-		removeAssetInstallations(input: $input) {
-			success
-			errors {
-				field
-				messages
-			}
-		}
-	}`
-
 	if version != "" {
 		return errors.New("version-specific removal is not supported for Sleuth vaults")
 	}
 
-	input := map[string]any{
-		"assetName": assetName,
-	}
+	input := vaultgql.RemoveAssetInstallationsInput{AssetName: assetName}
+	// Only set Delete when the caller asked for permanent deletion, mirroring
+	// the old "omit when false" wire shape. Server-side default is false, so
+	// nil and false are equivalent on this field.
 	if delete {
-		input["delete"] = true
+		input.Delete = &delete
 	}
 
-	variables := map[string]any{
-		"input": input,
-	}
-
-	var gqlResp struct {
-		Data struct {
-			RemoveAssetInstallations struct {
-				Success *bool `json:"success"`
-				Errors  []struct {
-					Field    string   `json:"field"`
-					Messages []string `json:"messages"`
-				} `json:"errors"`
-			} `json:"removeAssetInstallations"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	if err := s.executeGraphQLQuery(ctx, mutation, variables, &gqlResp); err != nil {
+	resp, err := vaultgql.RemoveAssetInstallations(ctx, s.gqlClient(), input)
+	if err != nil {
 		return err
 	}
-
-	if len(gqlResp.Errors) > 0 {
-		return fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
+	if resp.RemoveAssetInstallations == nil {
+		return errors.New("missing removeAssetInstallations payload in response")
 	}
-
-	if len(gqlResp.Data.RemoveAssetInstallations.Errors) > 0 {
-		err := gqlResp.Data.RemoveAssetInstallations.Errors[0]
-		return fmt.Errorf("%s: %s", err.Field, err.Messages[0])
+	if err := gqlMutationErrors(resp.RemoveAssetInstallations.Errors); err != nil {
+		return err
 	}
-
-	if gqlResp.Data.RemoveAssetInstallations.Success == nil || !*gqlResp.Data.RemoveAssetInstallations.Success {
+	if !resp.RemoveAssetInstallations.Success {
 		return errors.New("failed to remove asset installations")
 	}
-
 	s.refreshLockFileCache()
 	return nil
 }
