@@ -660,51 +660,6 @@ func (s *SleuthVault) GetAssetDetails(ctx context.Context, name string) (*AssetD
 	return details, nil
 }
 
-// QueryIntegration queries integrated services (GitHub, CircleCI, Linear) using natural language
-func (s *SleuthVault) QueryIntegration(ctx context.Context, query, integration string, gitContext any) (string, error) {
-	// Convert integration string to uppercase for Provider enum (github -> GITHUB)
-	provider := strings.ToUpper(integration)
-
-	gqlQuery := `query AiQuery($input: AiQueryInput!) {
-		aiQuery(input: $input) {
-			status
-			data
-			toolCallsMade
-		}
-	}`
-
-	variables := map[string]any{
-		"input": map[string]any{
-			"query":    query,
-			"provider": provider,
-			"context":  gitContext,
-		},
-	}
-
-	var gqlResp struct {
-		Data struct {
-			AiQuery struct {
-				Status        string   `json:"status"`
-				Data          string   `json:"data"`
-				ToolCallsMade []string `json:"toolCallsMade"`
-			} `json:"aiQuery"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	if err := s.executeGraphQLQuery(ctx, gqlQuery, variables, &gqlResp); err != nil {
-		return "", err
-	}
-
-	if len(gqlResp.Errors) > 0 {
-		return "", fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
-	}
-
-	return gqlResp.Data.AiQuery.Data, nil
-}
-
 // QueryIntegrationStream queries integrated services using SSE streaming.
 // The onEvent callback is called for each event received, which can be used
 // to send MCP log notifications to keep the connection alive.
