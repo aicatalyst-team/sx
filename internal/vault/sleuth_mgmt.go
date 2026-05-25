@@ -754,35 +754,14 @@ func (s *SleuthVault) ListBotApiKeys(ctx context.Context, botName string) ([]mgm
 	if err != nil {
 		return nil, err
 	}
-	query := `query BotApiKeys($slug: String!) {
-		bot(slug: $slug) {
-			apiKeys { id label maskedToken createdAt }
-		}
-	}`
-	vars := map[string]any{"slug": slug}
-	var resp struct {
-		Data struct {
-			Bot struct {
-				APIKeys []struct {
-					ID          string    `json:"id"`
-					Label       string    `json:"label"`
-					MaskedToken string    `json:"maskedToken"`
-					CreatedAt   time.Time `json:"createdAt"`
-				} `json:"apiKeys"`
-			} `json:"bot"`
-		} `json:"data"`
-		Errors []sleuthGraphQLError `json:"errors"`
-	}
-	if err := s.executeGraphQLQuery(ctx, query, vars, &resp); err != nil {
+	resp, err := vaultgql.BotApiKeys(ctx, s.gqlClient(), slug)
+	if err != nil {
 		return nil, err
 	}
-	if err := sleuthErrorsToErr(resp.Errors); err != nil {
-		return nil, err
-	}
-	out := make([]mgmt.BotApiKey, 0, len(resp.Data.Bot.APIKeys))
-	for _, k := range resp.Data.Bot.APIKeys {
+	out := make([]mgmt.BotApiKey, 0, len(resp.Bot.ApiKeys))
+	for _, k := range resp.Bot.ApiKeys {
 		out = append(out, mgmt.BotApiKey{
-			ID:          k.ID,
+			ID:          k.Id,
 			Label:       k.Label,
 			MaskedToken: k.MaskedToken,
 			CreatedAt:   k.CreatedAt,
