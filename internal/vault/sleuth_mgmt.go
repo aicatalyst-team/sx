@@ -663,29 +663,13 @@ func (s *SleuthVault) botsWithAssetInstalled(ctx context.Context, assetName stri
 	worker := func() {
 		for idx := range jobs {
 			n := nodes[idx]
-			query := `query BotInstalled($slug: String!) { bot(slug: $slug) { installedSkills { name } } }`
-			vars := map[string]any{"slug": n.Slug}
-			var resp struct {
-				Data struct {
-					Bot struct {
-						InstalledSkills []struct {
-							Name string `json:"name"`
-						} `json:"installedSkills"`
-					} `json:"bot"`
-				} `json:"data"`
-				Errors []sleuthGraphQLError `json:"errors"`
-			}
-			if err := s.executeGraphQLQuery(innerCtx, query, vars, &resp); err != nil {
+			resp, err := vaultgql.BotInstalled(innerCtx, s.gqlClient(), n.Slug)
+			if err != nil {
 				errs <- err
 				cancel()
 				return
 			}
-			if err := sleuthErrorsToErr(resp.Errors); err != nil {
-				errs <- err
-				cancel()
-				return
-			}
-			for _, sk := range resp.Data.Bot.InstalledSkills {
+			for _, sk := range resp.Bot.InstalledSkills {
 				if sk.Name == assetName {
 					results <- result{idx: idx, gid: n.ID}
 					break
