@@ -915,12 +915,12 @@ func (v *RemoveAssetInstallationsInput) GetDelete() *bool { return v.Delete }
 
 // RemoveAssetInstallationsRemoveAssetInstallationsRemoveAssetInstallationsMutation includes the requested fields of the GraphQL type RemoveAssetInstallationsMutation.
 type RemoveAssetInstallationsRemoveAssetInstallationsRemoveAssetInstallationsMutation struct {
-	Success *bool                                                                                             `json:"success"`
+	Success bool                                                                                              `json:"success"`
 	Errors  []RemoveAssetInstallationsRemoveAssetInstallationsRemoveAssetInstallationsMutationErrorsErrorType `json:"errors"`
 }
 
 // GetSuccess returns RemoveAssetInstallationsRemoveAssetInstallationsRemoveAssetInstallationsMutation.Success, and is useful for accessing the field via an interface.
-func (v *RemoveAssetInstallationsRemoveAssetInstallationsRemoveAssetInstallationsMutation) GetSuccess() *bool {
+func (v *RemoveAssetInstallationsRemoveAssetInstallationsRemoveAssetInstallationsMutation) GetSuccess() bool {
 	return v.Success
 }
 
@@ -1000,6 +1000,55 @@ type RemoveTeamMemberResponse struct {
 // GetRemoveTeamMember returns RemoveTeamMemberResponse.RemoveTeamMember, and is useful for accessing the field via an interface.
 func (v *RemoveTeamMemberResponse) GetRemoveTeamMember() *RemoveTeamMemberRemoveTeamMemberRemoveTeamMemberMutation {
 	return v.RemoveTeamMember
+}
+
+type RenameAssetInput struct {
+	OldName string `json:"oldName"`
+	NewName string `json:"newName"`
+}
+
+// GetOldName returns RenameAssetInput.OldName, and is useful for accessing the field via an interface.
+func (v *RenameAssetInput) GetOldName() string { return v.OldName }
+
+// GetNewName returns RenameAssetInput.NewName, and is useful for accessing the field via an interface.
+func (v *RenameAssetInput) GetNewName() string { return v.NewName }
+
+// RenameAssetRenameAssetRenameAssetMutation includes the requested fields of the GraphQL type RenameAssetMutation.
+type RenameAssetRenameAssetRenameAssetMutation struct {
+	Success bool                                                       `json:"success"`
+	Errors  []RenameAssetRenameAssetRenameAssetMutationErrorsErrorType `json:"errors"`
+}
+
+// GetSuccess returns RenameAssetRenameAssetRenameAssetMutation.Success, and is useful for accessing the field via an interface.
+func (v *RenameAssetRenameAssetRenameAssetMutation) GetSuccess() bool { return v.Success }
+
+// GetErrors returns RenameAssetRenameAssetRenameAssetMutation.Errors, and is useful for accessing the field via an interface.
+func (v *RenameAssetRenameAssetRenameAssetMutation) GetErrors() []RenameAssetRenameAssetRenameAssetMutationErrorsErrorType {
+	return v.Errors
+}
+
+// RenameAssetRenameAssetRenameAssetMutationErrorsErrorType includes the requested fields of the GraphQL type ErrorType.
+type RenameAssetRenameAssetRenameAssetMutationErrorsErrorType struct {
+	Field    string   `json:"field"`
+	Messages []string `json:"messages"`
+}
+
+// GetField returns RenameAssetRenameAssetRenameAssetMutationErrorsErrorType.Field, and is useful for accessing the field via an interface.
+func (v *RenameAssetRenameAssetRenameAssetMutationErrorsErrorType) GetField() string { return v.Field }
+
+// GetMessages returns RenameAssetRenameAssetRenameAssetMutationErrorsErrorType.Messages, and is useful for accessing the field via an interface.
+func (v *RenameAssetRenameAssetRenameAssetMutationErrorsErrorType) GetMessages() []string {
+	return v.Messages
+}
+
+// RenameAssetResponse is returned by RenameAsset on success.
+type RenameAssetResponse struct {
+	RenameAsset *RenameAssetRenameAssetRenameAssetMutation `json:"renameAsset"`
+}
+
+// GetRenameAsset returns RenameAssetResponse.RenameAsset, and is useful for accessing the field via an interface.
+func (v *RenameAssetResponse) GetRenameAsset() *RenameAssetRenameAssetRenameAssetMutation {
+	return v.RenameAsset
 }
 
 type RepositoryInstallationInput struct {
@@ -1771,6 +1820,14 @@ type __RemoveTeamMemberInput struct {
 // GetInput returns __RemoveTeamMemberInput.Input, and is useful for accessing the field via an interface.
 func (v *__RemoveTeamMemberInput) GetInput() RemoveTeamMemberInput { return v.Input }
 
+// __RenameAssetInput is used internally by genqlient
+type __RenameAssetInput struct {
+	Input RenameAssetInput `json:"input"`
+}
+
+// GetInput returns __RenameAssetInput.Input, and is useful for accessing the field via an interface.
+func (v *__RenameAssetInput) GetInput() RenameAssetInput { return v.Input }
+
 // __SetAssetInstallationsInput is used internally by genqlient
 type __SetAssetInstallationsInput struct {
 	Input SetAssetInstallationsInput `json:"input"`
@@ -2376,6 +2433,44 @@ func RemoveTeamMember(
 	}
 
 	data_ = &RemoveTeamMemberResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The mutation executed by RenameAsset.
+const RenameAsset_Operation = `
+mutation RenameAsset ($input: RenameAssetInput!) {
+	renameAsset(input: $input) {
+		success
+		errors {
+			field
+			messages
+		}
+	}
+}
+`
+
+func RenameAsset(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	input RenameAssetInput,
+) (data_ *RenameAssetResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "RenameAsset",
+		Query:  RenameAsset_Operation,
+		Variables: &__RenameAssetInput{
+			Input: input,
+		},
+	}
+
+	data_ = &RenameAssetResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(

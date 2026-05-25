@@ -1,0 +1,9 @@
+mutation RenameAsset($input: RenameAssetInput!) {
+  renameAsset(input: $input) {
+    success
+    errors {
+      field
+      messages
+    }
+  }
+}

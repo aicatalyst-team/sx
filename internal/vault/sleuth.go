@@ -24,6 +24,7 @@ import (
 	"github.com/sleuth-io/sx/internal/logger"
 	"github.com/sleuth-io/sx/internal/metadata"
 	"github.com/sleuth-io/sx/internal/mgmt"
+	vaultgql "github.com/sleuth-io/sx/internal/vault/graphql"
 	"github.com/sleuth-io/sx/internal/version"
 )
 
@@ -485,55 +486,22 @@ func (s *SleuthVault) RemoveAsset(ctx context.Context, assetName, version string
 
 // RenameAsset renames an asset on the Sleuth server using a GraphQL mutation.
 func (s *SleuthVault) RenameAsset(ctx context.Context, oldName, newName string) error {
-	mutation := `mutation RenameAsset($input: RenameAssetInput!) {
-		renameAsset(input: $input) {
-			success
-			errors {
-				field
-				messages
-			}
-		}
-	}`
-
-	variables := map[string]any{
-		"input": map[string]any{
-			"oldName": oldName,
-			"newName": newName,
-		},
-	}
-
-	var gqlResp struct {
-		Data struct {
-			RenameAsset struct {
-				Success *bool `json:"success"`
-				Errors  []struct {
-					Field    string   `json:"field"`
-					Messages []string `json:"messages"`
-				} `json:"errors"`
-			} `json:"renameAsset"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	if err := s.executeGraphQLQuery(ctx, mutation, variables, &gqlResp); err != nil {
+	resp, err := vaultgql.RenameAsset(ctx, s.gqlClient(), vaultgql.RenameAssetInput{
+		OldName: oldName,
+		NewName: newName,
+	})
+	if err != nil {
 		return err
 	}
-
-	if len(gqlResp.Errors) > 0 {
-		return fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
+	if resp.RenameAsset == nil {
+		return errors.New("missing renameAsset payload in response")
 	}
-
-	if len(gqlResp.Data.RenameAsset.Errors) > 0 {
-		err := gqlResp.Data.RenameAsset.Errors[0]
-		return fmt.Errorf("%s: %s", err.Field, err.Messages[0])
+	if err := gqlMutationErrors(resp.RenameAsset.Errors); err != nil {
+		return err
 	}
-
-	if gqlResp.Data.RenameAsset.Success == nil || !*gqlResp.Data.RenameAsset.Success {
+	if !resp.RenameAsset.Success {
 		return errors.New("failed to rename asset")
 	}
-
 	s.refreshLockFileCache()
 	return nil
 }
