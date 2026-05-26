@@ -30,7 +30,8 @@ import (
 
 // authDoer wraps an http.Client to add the Sleuth auth + User-Agent headers
 // on every request. Used to back the genqlient client so generated query
-// functions share the same auth path as [SleuthVault.executeGraphQLQuery].
+// functions share the same auth + User-Agent headers as direct httpClient.Do
+// calls elsewhere in this package.
 type authDoer struct {
 	client    *http.Client
 	authToken string
@@ -56,6 +57,12 @@ func (s *SleuthVault) gqlClient() graphql.Client {
 
 // scopeEntityPersonal is the scope entity value for personal (user-only) installations.
 const scopeEntityPersonal = "personal"
+
+// vaultAssetsByNamePageSize must mirror the `first:` value in
+// internal/vault/graphql/operations/vault_assets_by_name.graphql. Used to
+// detect a saturated result page so the caller can be told that more
+// matches exist beyond the page.
+const vaultAssetsByNamePageSize = 50
 
 // SleuthVault implements Vault for Sleuth HTTP servers
 type SleuthVault struct {
@@ -496,8 +503,9 @@ func sxAssetTypeToGQL(t asset.Type) vaultgql.AssetType {
 	return ""
 }
 
-// gqlAssetTypeToSX is the inverse of sxAssetTypeToGQL. Returns the zero
-// asset.Type for unknown enum values so callers can detect via IsValid().
+// gqlAssetTypeToSX is the inverse of sxAssetTypeToGQL. For unknown enum
+// values it returns an asset.Type with the raw GraphQL key (uppercased),
+// which IsValid() reports as false so callers can detect and warn.
 func gqlAssetTypeToSX(t vaultgql.AssetType) asset.Type {
 	switch t {
 	case vaultgql.AssetTypeSkill:
@@ -620,6 +628,13 @@ func (s *SleuthVault) GetAssetDetails(ctx context.Context, name string) (*AssetD
 		}
 	}
 	if match == nil {
+		if len(resp.Vault.Assets.Nodes) >= vaultAssetsByNamePageSize {
+			logger.Get().Warn(
+				"VaultAssetsByName result saturated page size; exact match may exist beyond the page",
+				"page_size", vaultAssetsByNamePageSize,
+				"search", name,
+			)
+		}
 		return nil, fmt.Errorf("asset '%s' not found", name)
 	}
 
@@ -783,8 +798,10 @@ func (s *SleuthVault) SetInstallations(ctx context.Context, asset *lockfile.Asse
 
 	input := vaultgql.SetAssetInstallationsInput{
 		AssetName:    asset.Name,
-		AssetVersion: &asset.Version,
 		Repositories: repositories,
+	}
+	if asset.Version != "" {
+		input.AssetVersion = &asset.Version
 	}
 	if scopeEntity == scopeEntityPersonal {
 		personalOnly := true

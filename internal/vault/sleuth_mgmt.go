@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -898,12 +899,32 @@ func (s *SleuthVault) QueryAuditEvents(ctx context.Context, filter mgmt.AuditFil
 			TargetType: node.TargetType,
 			Target:     derefStr(node.TargetName),
 		}
-		// node.Data carries a JSONString scalar that wire-encodes as a
-		// JSON-encoded string ("{\"foo\":...}"), not an embedded object.
-		// The old code's `node.Data.(map[string]any)` assertion always
-		// failed silently, so ev.Data was always nil. Preserving that
-		// here pending a separate fix.
-		_ = node.Data
+		// node.Data is a JSONString scalar that normally wire-encodes as a
+		// JSON-encoded string ("{\"foo\":...}"), but older payloads may
+		// wire the object directly. Dispatch on the first non-whitespace
+		// byte so both shapes are handled explicitly.
+		if node.Data != nil {
+			raw := bytes.TrimSpace(*node.Data)
+			switch {
+			case len(raw) == 0, bytes.Equal(raw, []byte("null")):
+				// empty payload — nothing to decode
+			case raw[0] == '"':
+				var inner string
+				if err := json.Unmarshal(raw, &inner); err != nil || inner == "" {
+					if err != nil {
+						logger.Get().Warn("audit log: malformed JSONString Data", "err", err)
+					}
+					break
+				}
+				if err := json.Unmarshal([]byte(inner), &ev.Data); err != nil {
+					logger.Get().Warn("audit log: failed to decode inner Data object", "err", err)
+				}
+			default:
+				if err := json.Unmarshal(raw, &ev.Data); err != nil {
+					logger.Get().Warn("audit log: failed to decode Data object", "err", err)
+				}
+			}
+		}
 		if !sleuthAuditMatches(ev, filter) {
 			continue
 		}

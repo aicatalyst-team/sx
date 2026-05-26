@@ -4262,7 +4262,7 @@ func VaultAssets(
 const VaultAssetsByName_Operation = `
 query VaultAssetsByName ($search: String!) {
 	vault {
-		assets(search: $search, first: 10) {
+		assets(search: $search, first: 50) {
 			nodes {
 				__typename
 				name
