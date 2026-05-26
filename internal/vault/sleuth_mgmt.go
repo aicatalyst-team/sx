@@ -898,12 +898,22 @@ func (s *SleuthVault) QueryAuditEvents(ctx context.Context, filter mgmt.AuditFil
 			TargetType: node.TargetType,
 			Target:     derefStr(node.TargetName),
 		}
-		// node.Data carries a JSONString scalar that wire-encodes as a
-		// JSON-encoded string ("{\"foo\":...}"), not an embedded object.
-		// The old code's `node.Data.(map[string]any)` assertion always
-		// failed silently, so ev.Data was always nil. Preserving that
-		// here pending a separate fix.
-		_ = node.Data
+		// node.Data is a JSONString scalar that wire-encodes as a
+		// JSON-encoded string ("{\"foo\":...}"). Unmarshal the outer
+		// string first, then the inner JSON object into ev.Data.
+		if node.Data != nil {
+			var inner string
+			if err := json.Unmarshal(*node.Data, &inner); err == nil && inner != "" {
+				if err := json.Unmarshal([]byte(inner), &ev.Data); err != nil {
+					logger.Get().Warn("audit log: failed to decode Data payload", "err", err)
+				}
+			} else if err != nil {
+				// Older payloads may wire the object directly; try that.
+				if err := json.Unmarshal(*node.Data, &ev.Data); err != nil {
+					logger.Get().Warn("audit log: failed to decode Data payload", "err", err)
+				}
+			}
+		}
 		if !sleuthAuditMatches(ev, filter) {
 			continue
 		}

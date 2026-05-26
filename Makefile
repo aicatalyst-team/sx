@@ -133,7 +133,7 @@ gql-check: gql-generate ## Fail if generated GraphQL is stale or any inline ops 
 	fi
 	@echo "✓ GraphQL generated code is up to date"
 	@echo "Checking for inline GraphQL operations in Go source..."
-	@INLINE=$$(grep -rEn '`(query|mutation) [A-Z]' --include="*.go" \
+	@INLINE=$$(grep -rEn '`(query|mutation|subscription)([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*)?[[:space:]]*[({]' --include="*.go" \
 		--exclude-dir=graphql internal/); \
 	if [ -n "$$INLINE" ]; then \
 		echo "ERROR: inline GraphQL operations found in Go source:"; \

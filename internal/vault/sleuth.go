@@ -30,7 +30,8 @@ import (
 
 // authDoer wraps an http.Client to add the Sleuth auth + User-Agent headers
 // on every request. Used to back the genqlient client so generated query
-// functions share the same auth path as [SleuthVault.executeGraphQLQuery].
+// functions share the same auth + User-Agent headers as direct httpClient.Do
+// calls elsewhere in this package.
 type authDoer struct {
 	client    *http.Client
 	authToken string
@@ -496,8 +497,9 @@ func sxAssetTypeToGQL(t asset.Type) vaultgql.AssetType {
 	return ""
 }
 
-// gqlAssetTypeToSX is the inverse of sxAssetTypeToGQL. Returns the zero
-// asset.Type for unknown enum values so callers can detect via IsValid().
+// gqlAssetTypeToSX is the inverse of sxAssetTypeToGQL. For unknown enum
+// values it returns an asset.Type with the raw GraphQL key (uppercased),
+// which IsValid() reports as false so callers can detect and warn.
 func gqlAssetTypeToSX(t vaultgql.AssetType) asset.Type {
 	switch t {
 	case vaultgql.AssetTypeSkill:
@@ -783,8 +785,10 @@ func (s *SleuthVault) SetInstallations(ctx context.Context, asset *lockfile.Asse
 
 	input := vaultgql.SetAssetInstallationsInput{
 		AssetName:    asset.Name,
-		AssetVersion: &asset.Version,
 		Repositories: repositories,
+	}
+	if asset.Version != "" {
+		input.AssetVersion = &asset.Version
 	}
 	if scopeEntity == scopeEntityPersonal {
 		personalOnly := true
