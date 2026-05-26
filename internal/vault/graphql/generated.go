@@ -931,6 +931,109 @@ type ListBotsResponse struct {
 // GetBots returns ListBotsResponse.Bots, and is useful for accessing the field via an interface.
 func (v *ListBotsResponse) GetBots() []ListBotsBotsManagedBot { return v.Bots }
 
+// ListTeamsOrganizationOrganizationType includes the requested fields of the GraphQL type OrganizationType.
+type ListTeamsOrganizationOrganizationType struct {
+	Teams ListTeamsOrganizationOrganizationTypeTeamsTeamsConnection `json:"teams"`
+}
+
+// GetTeams returns ListTeamsOrganizationOrganizationType.Teams, and is useful for accessing the field via an interface.
+func (v *ListTeamsOrganizationOrganizationType) GetTeams() ListTeamsOrganizationOrganizationTypeTeamsTeamsConnection {
+	return v.Teams
+}
+
+// ListTeamsOrganizationOrganizationTypeTeamsTeamsConnection includes the requested fields of the GraphQL type TeamsConnection.
+type ListTeamsOrganizationOrganizationTypeTeamsTeamsConnection struct {
+	Nodes []ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam `json:"nodes"`
+}
+
+// GetNodes returns ListTeamsOrganizationOrganizationTypeTeamsTeamsConnection.Nodes, and is useful for accessing the field via an interface.
+func (v *ListTeamsOrganizationOrganizationTypeTeamsTeamsConnection) GetNodes() []ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam {
+	return v.Nodes
+}
+
+// ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam includes the requested fields of the GraphQL type Team.
+type ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam struct {
+	Id                 string                                                                                                     `json:"id"`
+	Name               string                                                                                                     `json:"name"`
+	AdminMemberIds     []string                                                                                                   `json:"adminMemberIds"`
+	Members            ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamMembersUserConnection                    `json:"members"`
+	SkillsRepositories []ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamSkillsRepositoriesSkillsRepositoryType `json:"skillsRepositories"`
+}
+
+// GetId returns ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam.Id, and is useful for accessing the field via an interface.
+func (v *ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam) GetId() string {
+	return v.Id
+}
+
+// GetName returns ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam.Name, and is useful for accessing the field via an interface.
+func (v *ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam) GetName() string {
+	return v.Name
+}
+
+// GetAdminMemberIds returns ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam.AdminMemberIds, and is useful for accessing the field via an interface.
+func (v *ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam) GetAdminMemberIds() []string {
+	return v.AdminMemberIds
+}
+
+// GetMembers returns ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam.Members, and is useful for accessing the field via an interface.
+func (v *ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam) GetMembers() ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamMembersUserConnection {
+	return v.Members
+}
+
+// GetSkillsRepositories returns ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam.SkillsRepositories, and is useful for accessing the field via an interface.
+func (v *ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeam) GetSkillsRepositories() []ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamSkillsRepositoriesSkillsRepositoryType {
+	return v.SkillsRepositories
+}
+
+// ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamMembersUserConnection includes the requested fields of the GraphQL type UserConnection.
+type ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamMembersUserConnection struct {
+	Nodes []ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamMembersUserConnectionNodesUser `json:"nodes"`
+}
+
+// GetNodes returns ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamMembersUserConnection.Nodes, and is useful for accessing the field via an interface.
+func (v *ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamMembersUserConnection) GetNodes() []ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamMembersUserConnectionNodesUser {
+	return v.Nodes
+}
+
+// ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamMembersUserConnectionNodesUser includes the requested fields of the GraphQL type User.
+type ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamMembersUserConnectionNodesUser struct {
+	Id    string `json:"id"`
+	Email string `json:"email"`
+}
+
+// GetId returns ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamMembersUserConnectionNodesUser.Id, and is useful for accessing the field via an interface.
+func (v *ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamMembersUserConnectionNodesUser) GetId() string {
+	return v.Id
+}
+
+// GetEmail returns ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamMembersUserConnectionNodesUser.Email, and is useful for accessing the field via an interface.
+func (v *ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamMembersUserConnectionNodesUser) GetEmail() string {
+	return v.Email
+}
+
+// ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamSkillsRepositoriesSkillsRepositoryType includes the requested fields of the GraphQL type SkillsRepositoryType.
+// The GraphQL type's documentation follows.
+//
+// GraphQL type for team-repository configuration with optional mono_repo_config
+type ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamSkillsRepositoriesSkillsRepositoryType struct {
+	RepositoryId string `json:"repositoryId"`
+}
+
+// GetRepositoryId returns ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamSkillsRepositoriesSkillsRepositoryType.RepositoryId, and is useful for accessing the field via an interface.
+func (v *ListTeamsOrganizationOrganizationTypeTeamsTeamsConnectionNodesTeamSkillsRepositoriesSkillsRepositoryType) GetRepositoryId() string {
+	return v.RepositoryId
+}
+
+// ListTeamsResponse is returned by ListTeams on success.
+type ListTeamsResponse struct {
+	Organization ListTeamsOrganizationOrganizationType `json:"organization"`
+}
+
+// GetOrganization returns ListTeamsResponse.Organization, and is useful for accessing the field via an interface.
+func (v *ListTeamsResponse) GetOrganization() ListTeamsOrganizationOrganizationType {
+	return v.Organization
+}
+
 type RemoveAssetInstallationsInput struct {
 	AssetName string `json:"assetName"`
 	Delete    *bool  `json:"delete"`
@@ -3054,6 +3157,14 @@ func (v *__InstallSkillToBotInput) GetBotId() string { return v.BotId }
 // GetSkillId returns __InstallSkillToBotInput.SkillId, and is useful for accessing the field via an interface.
 func (v *__InstallSkillToBotInput) GetSkillId() string { return v.SkillId }
 
+// __ListTeamsInput is used internally by genqlient
+type __ListTeamsInput struct {
+	First int `json:"first"`
+}
+
+// GetFirst returns __ListTeamsInput.First, and is useful for accessing the field via an interface.
+func (v *__ListTeamsInput) GetFirst() int { return v.First }
+
 // __RemoveAssetInstallationsInput is used internally by genqlient
 type __RemoveAssetInstallationsInput struct {
 	Input RemoveAssetInstallationsInput `json:"input"`
@@ -3632,6 +3743,55 @@ func ListBots(
 	}
 
 	data_ = &ListBotsResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The query executed by ListTeams.
+const ListTeams_Operation = `
+query ListTeams ($first: Int!) {
+	organization {
+		teams(first: $first) {
+			nodes {
+				id
+				name
+				adminMemberIds
+				members(first: $first) {
+					nodes {
+						id
+						email
+					}
+				}
+				skillsRepositories {
+					repositoryId
+				}
+			}
+		}
+	}
+}
+`
+
+func ListTeams(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	first int,
+) (data_ *ListTeamsResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "ListTeams",
+		Query:  ListTeams_Operation,
+		Variables: &__ListTeamsInput{
+			First: first,
+		},
+	}
+
+	data_ = &ListTeamsResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
