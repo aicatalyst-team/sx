@@ -2,6 +2,10 @@ package vault
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
+
+	"github.com/sleuth-io/sx/internal/git"
 )
 
 // Config represents the minimal configuration needed to create a vault
@@ -20,10 +24,27 @@ func NewFromConfig(cfg Config) (Vault, error) {
 	case "sleuth":
 		return NewSleuthVault(cfg.GetServerURL(), cfg.GetAuthToken()), nil
 	case "git":
-		return NewGitVault(cfg.GetRepositoryURL())
+		opts := []GitVaultOption(nil)
+		if tok := strings.TrimSpace(cfg.GetAuthToken()); tok != "" {
+			if host := gitAuthHost(cfg.GetRepositoryURL()); host != "" {
+				opts = append(opts, WithGitClient(git.NewClientWithOptions(git.WithHTTPSBasicAuth(host, "x-access-token", tok))))
+			}
+		}
+		return NewGitVaultWithOptions(cfg.GetRepositoryURL(), opts...)
 	case "path":
 		return NewPathVault(cfg.GetRepositoryURL())
 	default:
 		return nil, fmt.Errorf("unsupported vault type: %s", cfg.GetType())
 	}
+}
+
+func gitAuthHost(repoURL string) string {
+	u, err := url.Parse(repoURL)
+	if err == nil && u.Host != "" && u.Scheme == "https" {
+		return u.Host
+	}
+	if strings.HasPrefix(repoURL, "git@github.com:") {
+		return "github.com"
+	}
+	return ""
 }

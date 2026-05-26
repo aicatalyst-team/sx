@@ -62,24 +62,46 @@ type GitVault struct {
 	hasSynced bool
 }
 
+type GitVaultOption func(*gitVaultOptions)
+
+type gitVaultOptions struct {
+	gitClient *git.Client
+}
+
+func WithGitClient(client *git.Client) GitVaultOption {
+	return func(opts *gitVaultOptions) {
+		opts.gitClient = client
+	}
+}
+
 // NewGitVault creates a new Git repository
 func NewGitVault(repoURL string) (*GitVault, error) {
+	return NewGitVaultWithOptions(repoURL)
+}
+
+func NewGitVaultWithOptions(repoURL string, opts ...GitVaultOption) (*GitVault, error) {
+	options := gitVaultOptions{
+		gitClient: git.NewClient(),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+
 	// Get cache path for this repository
 	repoPath, err := cache.GetGitRepoCachePath(repoURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get cache path: %w", err)
 	}
 
-	// Create git client
-	gitClient := git.NewClient()
-
 	return &GitVault{
 		repoURL:     repoURL,
 		repoPath:    repoPath,
-		gitClient:   gitClient,
+		gitClient:   options.gitClient,
 		httpHandler: NewHTTPSourceHandler(""),       // No auth token for git repos
 		pathHandler: NewPathSourceHandler(repoPath), // Use repo path for relative paths
-		gitHandler:  NewGitSourceHandler(gitClient),
+		gitHandler:  NewGitSourceHandler(options.gitClient),
 	}, nil
 }
 
