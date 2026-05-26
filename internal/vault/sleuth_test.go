@@ -3,6 +3,7 @@ package vault
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -87,6 +88,11 @@ func TestSleuthVault_ListTeams_QueryShape(t *testing.T) {
 								},
 							},
 						},
+						"totalCount": 1,
+						"pageInfo": map[string]any{
+							"hasNextPage": false,
+							"endCursor":   nil,
+						},
 					},
 				},
 			}
@@ -94,12 +100,12 @@ func TestSleuthVault_ListTeams_QueryShape(t *testing.T) {
 	})
 
 	v := NewSleuthVault(srv.URL, "test-token")
-	teams, err := v.ListTeams(context.Background())
+	result, err := v.ListTeams(context.Background(), ListTeamsOptions{Limit: 100})
 	if err != nil {
 		t.Fatalf("ListTeams failed: %v", err)
 	}
-	if len(teams) != 1 || teams[0].Name != "platform" {
-		t.Fatalf("unexpected teams: %+v", teams)
+	if len(result.Teams) != 1 || result.Teams[0].Name != "platform" {
+		t.Fatalf("unexpected teams: %+v", result.Teams)
 	}
 	if len(*records) != 1 || (*records)[0].OperationName != "ListTeams" {
 		t.Fatalf("expected single ListTeams request, got: %+v", *records)
@@ -208,5 +214,99 @@ func TestSleuthVault_SetInstallations_OmitsEmptyVersion(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func makeTeamNodes(count int, prefix string) []any {
+	nodes := make([]any, count)
+	for i := range count {
+		nodes[i] = map[string]any{
+			"id":             fmt.Sprintf("team-%d", i),
+			"name":           fmt.Sprintf("%s-%d", prefix, i),
+			"adminMemberIds": []any{},
+			"members":        map[string]any{"nodes": []any{}},
+			"skillsRepositories": []any{},
+		}
+	}
+	return nodes
+}
+
+func TestSleuthVault_ListTeams_DefaultLimitAndTotalCount(t *testing.T) {
+	srv, _ := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"ListTeams": func(vars map[string]any) any {
+			first, _ := vars["first"].(float64)
+			if int(first) > 30 {
+				t.Errorf("expected first <= 30, got %v", first)
+			}
+			return map[string]any{
+				"organization": map[string]any{
+					"teams": map[string]any{
+						"nodes":      makeTeamNodes(20, "team"),
+						"totalCount": 55,
+						"pageInfo": map[string]any{
+							"hasNextPage": true,
+							"endCursor":   "cursor-20",
+						},
+					},
+				},
+			}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	result, err := v.ListTeams(context.Background(), ListTeamsOptions{})
+	if err != nil {
+		t.Fatalf("ListTeams failed: %v", err)
+	}
+	if len(result.Teams) != 20 {
+		t.Errorf("expected 20 teams, got %d", len(result.Teams))
+	}
+	if result.TotalCount != 55 {
+		t.Errorf("expected TotalCount=55, got %d", result.TotalCount)
+	}
+	if !result.HasMore {
+		t.Error("expected HasMore=true")
+	}
+}
+
+func TestSleuthVault_ListTeams_FilterPassesTerm(t *testing.T) {
+	srv, records := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"ListTeams": func(vars map[string]any) any {
+			term, _ := vars["term"].(string)
+			if term != "platform" {
+				t.Errorf("expected term=platform, got %q", term)
+			}
+			return map[string]any{
+				"organization": map[string]any{
+					"teams": map[string]any{
+						"nodes":      makeTeamNodes(2, "platform"),
+						"totalCount": 2,
+						"pageInfo": map[string]any{
+							"hasNextPage": false,
+							"endCursor":   nil,
+						},
+					},
+				},
+			}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	result, err := v.ListTeams(context.Background(), ListTeamsOptions{Filter: "platform"})
+	if err != nil {
+		t.Fatalf("ListTeams failed: %v", err)
+	}
+	if len(result.Teams) != 2 {
+		t.Errorf("expected 2 teams, got %d", len(result.Teams))
+	}
+	if result.TotalCount != 2 {
+		t.Errorf("expected TotalCount=2, got %d", result.TotalCount)
+	}
+	if result.HasMore {
+		t.Error("expected HasMore=false")
+	}
+	rec := (*records)[0]
+	if _, ok := rec.Variables["term"]; !ok {
+		t.Error("expected $term variable in request")
 	}
 }
