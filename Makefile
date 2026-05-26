@@ -123,7 +123,7 @@ gql-generate: ## Regenerate GraphQL client code from .graphql files
 	@echo "Regenerating GraphQL client..."
 	@cd $(GQL_DIR) && go tool genqlient
 
-gql-check: gql-generate ## Fail if generated GraphQL code is out of date
+gql-check: gql-generate ## Fail if generated GraphQL is stale or any inline ops exist
 	@echo "Checking GraphQL generated code is up to date..."
 	@if ! git diff --quiet -- $(GQL_DIR)/generated.go; then \
 		echo "ERROR: $(GQL_DIR)/generated.go is out of date."; \
@@ -132,6 +132,18 @@ gql-check: gql-generate ## Fail if generated GraphQL code is out of date
 		exit 1; \
 	fi
 	@echo "✓ GraphQL generated code is up to date"
+	@echo "Checking for inline GraphQL operations in Go source..."
+	@INLINE=$$(grep -rEn '`(query|mutation) [A-Z]' --include="*.go" \
+		--exclude-dir=graphql internal/); \
+	if [ -n "$$INLINE" ]; then \
+		echo "ERROR: inline GraphQL operations found in Go source:"; \
+		echo "$$INLINE"; \
+		echo ""; \
+		echo "Every GraphQL operation must live in $(GQL_DIR)/operations/<name>.graphql."; \
+		echo "Move the operation, run 'make gql-generate', and update the call site to use the generated function."; \
+		exit 1; \
+	fi
+	@echo "✓ No inline GraphQL operations"
 
 prepush: format lint gql-check test build ## Run before pushing (format, lint, gql-check, test, build)
 
