@@ -52,9 +52,19 @@ type GitOptions struct {
 	Actor Actor
 }
 
+// SkillsNewOptions configures OpenSkillsNewWithOptions. Sleuth-backed vaults
+// do not use the SSH key / basic-auth knobs that GitOptions carries, so this
+// type intentionally exposes a narrower surface.
 type SkillsNewOptions struct {
+	// AuthToken is the bearer token sent on every Sleuth API request.
+	// Required — OpenSkillsNewWithOptions returns an error when empty.
+	// There is no host-specific default (unlike GitOptions.AuthUsername),
+	// because Sleuth endpoints accept exactly one credential shape.
 	AuthToken string
-	Actor     Actor
+	// Actor identifies the caller for audit/identity context propagated
+	// via mgmt.ContextWithIdentity. Only Actor.Email is consumed on the
+	// Sleuth path — Actor.Name is ignored here (see Actor.Name doc).
+	Actor Actor
 }
 
 type Client struct {
@@ -94,6 +104,11 @@ type AgentSpec struct {
 	// collapsed. Skills are installed on the bot but are NOT persisted
 	// into the agent asset's metadata.toml; re-publishing the agent into
 	// another vault requires re-supplying Skills.
+	//
+	// Cost note for git vaults: each skill install is a separate manifest
+	// commit + push, so an agent with N skills produces roughly N+2
+	// commits per PutAgent call. Keep skill lists modest or expect the
+	// publish latency to grow linearly.
 	Skills []string
 }
 
@@ -111,6 +126,10 @@ type SkillZipSpec struct {
 	// Empty preserves any description already embedded in the uploaded zip.
 	Description string
 	ZipData     []byte
+	// BotName, when non-empty, installs the published skill onto that bot
+	// after the asset upload completes. Leave empty to publish the skill
+	// without attaching it to any bot.
+	BotName string
 }
 
 type AssetSummary struct {
@@ -233,6 +252,9 @@ func (c *Client) EnsureBot(ctx context.Context, bot Bot) (string, error) {
 // vaults overwrite the stored bytes. Bump the version when you need a
 // guaranteed update across all backends.
 func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, error) {
+	if c == nil || c.v == nil {
+		return AgentResult{}, errors.New("sxvault: nil client")
+	}
 	spec.BotName = strings.TrimSpace(spec.BotName)
 	spec.AssetName = strings.TrimSpace(spec.AssetName)
 	spec.Version = strings.TrimSpace(spec.Version)
@@ -247,7 +269,10 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 	skills := cleanNames(spec.Skills)
 	for _, skill := range skills {
 		versions, vErr := c.v.GetVersionList(ctx, skill)
-		if vErr != nil || len(versions) == 0 {
+		if vErr != nil {
+			return AgentResult{}, fmt.Errorf("sxvault: checking skill %q: %w", skill, vErr)
+		}
+		if len(versions) == 0 {
 			return AgentResult{}, fmt.Errorf("sxvault: skill %q not found in vault", skill)
 		}
 	}
@@ -274,8 +299,8 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 	return AgentResult{BotKey: botKey}, nil
 }
 
-// PutSkillZip uploads a skill zip and, when botName is non-empty, installs
-// the skill on that bot.
+// PutSkillZip uploads a skill zip and, when spec.BotName is non-empty,
+// installs the skill on that bot.
 //
 // Re-publishing an existing Name@Version is idempotent for the manifest: the
 // version is listed once and installations are re-run, which also makes this
@@ -284,9 +309,13 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 // (new ZipData on a re-publish is silently discarded); Git vaults overwrite
 // the stored bytes. Bump the version when you need a guaranteed update
 // across all backends.
-func (c *Client) PutSkillZip(ctx context.Context, spec SkillZipSpec, botName string) error {
+func (c *Client) PutSkillZip(ctx context.Context, spec SkillZipSpec) error {
+	if c == nil || c.v == nil {
+		return errors.New("sxvault: nil client")
+	}
 	spec.Name = strings.TrimSpace(spec.Name)
 	spec.Version = strings.TrimSpace(spec.Version)
+	spec.BotName = strings.TrimSpace(spec.BotName)
 	if spec.Name == "" || spec.Version == "" {
 		return errors.New("sxvault: skill name and version are required")
 	}
@@ -299,10 +328,10 @@ func (c *Client) PutSkillZip(ctx context.Context, spec SkillZipSpec, botName str
 	if err := c.addAsset(ctx, ast, zipData); err != nil {
 		return err
 	}
-	if strings.TrimSpace(botName) == "" {
+	if spec.BotName == "" {
 		return nil
 	}
-	return c.InstallAssetToBot(ctx, spec.Name, botName)
+	return c.InstallAssetToBot(ctx, spec.Name, spec.BotName)
 }
 
 func (c *Client) InstallAssetToBot(ctx context.Context, assetName, botName string) error {

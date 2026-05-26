@@ -100,10 +100,10 @@ func TestPutSkillZipSameVersionIsIdempotent(t *testing.T) {
 		Description: "Helps with lint fixes.",
 		ZipData:     skillZip(t, "Lint carefully."),
 	}
-	if err := client.PutSkillZip(ctx, spec, ""); err != nil {
+	if err := client.PutSkillZip(ctx, spec); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.PutSkillZip(ctx, spec, ""); err != nil {
+	if err := client.PutSkillZip(ctx, spec); err != nil {
 		t.Fatal(err)
 	}
 
@@ -126,7 +126,7 @@ func TestPutSkillZipDescriptionPrecedence(t *testing.T) {
 		Name:    "lint-helper",
 		Version: "1.0.0",
 		ZipData: preservedZip,
-	}, ""); err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -137,7 +137,7 @@ func TestPutSkillZipDescriptionPrecedence(t *testing.T) {
 		Version:     "1.0.0",
 		Description: "Spec description wins.",
 		ZipData:     overrideZip,
-	}, ""); err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -164,7 +164,7 @@ func TestPutSkillZipWithAndWithoutBotInstall(t *testing.T) {
 		Version:     "1.0.0",
 		Description: "Helps with lint fixes.",
 		ZipData:     skillZip(t, "Lint carefully."),
-	}, ""); err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.EnsureBot(ctx, Bot{Name: "reviewer", Description: "Reviews pull requests."}); err != nil {
@@ -175,7 +175,8 @@ func TestPutSkillZipWithAndWithoutBotInstall(t *testing.T) {
 		Version:     "1.0.0",
 		Description: "Helps with test fixes.",
 		ZipData:     skillZip(t, "Test carefully."),
-	}, "reviewer"); err != nil {
+		BotName:     "reviewer",
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -202,7 +203,7 @@ func TestListAssetsWithOptionsHonorsLimitAndSearch(t *testing.T) {
 			Name:    name,
 			Version: "1.0.0",
 			ZipData: skillZip(t, name),
-		}, ""); err != nil {
+		}); err != nil {
 			t.Fatal(err)
 		}
 	}
