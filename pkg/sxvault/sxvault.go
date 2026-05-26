@@ -25,11 +25,11 @@ type Actor struct {
 }
 
 type GitOptions struct {
-	// AuthToken authenticates HTTPS git remotes through basic auth. SSH
+	// AuthToken authenticates HTTP(S) git remotes through basic auth. SSH
 	// remotes ignore this value and use the caller's SSH configuration.
 	AuthToken string
 
-	// AuthUsername is the HTTPS basic-auth username to pair with AuthToken.
+	// AuthUsername is the HTTP(S) basic-auth username to pair with AuthToken.
 	// Empty uses a host-specific default, currently "x-access-token" except
 	// GitLab hosts, which use "oauth2".
 	AuthUsername string
@@ -43,9 +43,8 @@ type SkillsNewOptions struct {
 }
 
 type Client struct {
-	v           vault.Vault
-	actor       Actor
-	gitExtraEnv []string
+	v     vault.Vault
+	actor Actor
 }
 
 type Bot struct {
@@ -71,8 +70,10 @@ type AgentResult struct {
 }
 
 type SkillZipSpec struct {
-	Name        string
-	Version     string
+	Name    string
+	Version string
+	// Description overrides metadata.toml's skill description when non-empty.
+	// Empty preserves any description already embedded in the uploaded zip.
 	Description string
 	ZipData     []byte
 }
@@ -116,7 +117,7 @@ func OpenGit(repoURL string, opts GitOptions) (*Client, error) {
 	if tok := strings.TrimSpace(opts.AuthToken); tok != "" {
 		info := git.ParseRemoteAuthInfo(repoURL)
 		if info.HTTP {
-			gitOpts = append(gitOpts, git.WithHTTPBasicAuth(info.Scheme, info.Host, git.DefaultHTTPSAuthUsername(info.Host, opts.AuthUsername), tok))
+			gitOpts = append(gitOpts, git.WithHTTPBasicAuth(info.Scheme, info.Host, git.DefaultHTTPAuthUsername(info.Host, opts.AuthUsername), tok))
 		} else if git.LooksLikeHTTPRemote(repoURL) {
 			return nil, fmt.Errorf("sxvault: cannot derive git auth host from %q", repoURL)
 		}
@@ -126,7 +127,7 @@ func OpenGit(repoURL string, opts GitOptions) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{v: gv, actor: opts.Actor, gitExtraEnv: gitClient.ExtraEnv()}, nil
+	return &Client{v: gv, actor: opts.Actor}, nil
 }
 
 // EnsureBot creates the named bot if missing and updates its description when

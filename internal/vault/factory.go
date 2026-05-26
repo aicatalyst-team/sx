@@ -34,7 +34,7 @@ func NewFromConfig(cfg Config) (Vault, error) {
 				opts = append(opts, WithGitClient(git.NewClientWithOptions(git.WithHTTPBasicAuth(
 					info.Scheme,
 					info.Host,
-					git.DefaultHTTPSAuthUsername(info.Host, authUsername(cfg)),
+					git.DefaultHTTPAuthUsername(info.Host, authUsername(cfg)),
 					tok,
 				))))
 			}

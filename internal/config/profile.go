@@ -24,10 +24,10 @@ type Profile struct {
 	// ServerURL is the Sleuth server URL (only for type=sleuth)
 	ServerURL string `json:"serverUrl,omitempty"`
 
-	// AuthToken is the OAuth token for Sleuth server or an HTTPS git token.
+	// AuthToken is the OAuth token for Sleuth server or an HTTP(S) git token.
 	AuthToken string `json:"authToken,omitempty"`
 
-	// AuthUsername is the HTTPS basic-auth username used with AuthToken for
+	// AuthUsername is the HTTP(S) basic-auth username used with AuthToken for
 	// git repositories. Empty uses a host-specific default.
 	AuthUsername string `json:"authUsername,omitempty"`
 

@@ -402,6 +402,10 @@ func (p *PathVault) ListAssets(ctx context.Context, opts ListAssetsOptions) (*Li
 		assets = append(assets, assetSummary)
 	}
 
+	if search := strings.TrimSpace(opts.Search); search != "" {
+		assets = filterBySearch(assets, search)
+	}
+
 	// Apply limit if specified
 	if opts.Limit > 0 && len(assets) > opts.Limit {
 		assets = assets[:opts.Limit]

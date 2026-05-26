@@ -41,9 +41,9 @@ func LooksLikeHTTPRemote(repoURL string) bool {
 	return strings.HasPrefix(repoURL, "https://") || strings.HasPrefix(repoURL, "http://")
 }
 
-// DefaultHTTPSAuthUsername returns a reasonable basic-auth username for a git
-// HTTPS token when the caller did not configure one explicitly.
-func DefaultHTTPSAuthUsername(host, explicit string) string {
+// DefaultHTTPAuthUsername returns a reasonable basic-auth username for a git
+// HTTP(S) token when the caller did not configure one explicitly.
+func DefaultHTTPAuthUsername(host, explicit string) string {
 	if explicit = strings.TrimSpace(explicit); explicit != "" {
 		return explicit
 	}

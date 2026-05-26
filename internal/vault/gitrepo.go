@@ -74,6 +74,14 @@ func WithGitClient(client *git.Client) GitVaultOption {
 	}
 }
 
+// GitExtraEnv returns the additional environment passed to git commands.
+func (g *GitVault) GitExtraEnv() []string {
+	if g == nil || g.gitClient == nil {
+		return nil
+	}
+	return g.gitClient.ExtraEnv()
+}
+
 // NewGitVault creates a new Git repository
 func NewGitVault(repoURL string) (*GitVault, error) {
 	return NewGitVaultWithOptions(repoURL)
@@ -1067,6 +1075,10 @@ func (g *GitVault) ListAssets(ctx context.Context, opts ListAssetsOptions) (*Lis
 		}
 
 		assets = append(assets, assetSummary)
+	}
+
+	if search := strings.TrimSpace(opts.Search); search != "" {
+		assets = filterBySearch(assets, search)
 	}
 
 	// Apply limit if specified
