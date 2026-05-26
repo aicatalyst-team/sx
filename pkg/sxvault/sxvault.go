@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/sleuth-io/sx/internal/asset"
 	"github.com/sleuth-io/sx/internal/git"
@@ -36,7 +37,10 @@ type GitOptions struct {
 
 	// AuthUsername is the HTTP(S) basic-auth username to pair with AuthToken.
 	// Empty uses a host-specific default, currently "x-access-token" except
-	// GitLab hosts, which use "oauth2".
+	// gitlab.com / *.gitlab.com, which use "oauth2". Self-hosted GitLab
+	// instances on custom domains are NOT auto-detected — set this to
+	// "oauth2" explicitly when targeting one, or git authentication will
+	// fail with the default "x-access-token".
 	AuthUsername string
 
 	// SSHKeyPath, when non-empty, points the underlying git client at this
@@ -59,17 +63,38 @@ type Client struct {
 }
 
 type Bot struct {
-	Name        string
+	Name string
+	// Description is the bot's human-readable identity. EnsureBot writes it
+	// on bot create and updates it when it differs from the stored value.
+	// Pass an empty string to leave an existing bot's description unchanged
+	// (useful when you want to ensure-bot without re-stamping identity).
 	Description string
 }
 
 type AgentSpec struct {
-	BotName     string
-	AssetName   string
-	Version     string
+	BotName   string
+	AssetName string
+	Version   string
+	// Description is the agent asset's description, written into the asset
+	// metadata.toml. It is separate from the bot's identity description —
+	// publishing multiple agents on the same bot should give each its own
+	// Description without rewriting the bot's identity each time.
 	Description string
-	Prompt      string
-	Skills      []string
+	// BotDescription, when non-empty, becomes the bot's description (on
+	// create, or as an update when it differs from the stored value). Leave
+	// empty to avoid rewriting an existing bot's description on every
+	// publish; pre-create the bot via EnsureBot if you want bot identity
+	// fully controlled outside the agent-publish path.
+	BotDescription string
+	Prompt         string
+	// Skills lists existing vault skills to also install on BotName
+	// alongside the agent. Each entry must refer to a skill already
+	// present in the vault — PutAgent verifies this and fails fast if any
+	// name is missing. Empty entries are dropped and duplicates are
+	// collapsed. Skills are installed on the bot but are NOT persisted
+	// into the agent asset's metadata.toml; re-publishing the agent into
+	// another vault requires re-supplying Skills.
+	Skills []string
 }
 
 type AgentResult struct {
@@ -92,7 +117,13 @@ type AssetSummary struct {
 	Name          string
 	Type          string
 	LatestVersion string
+	VersionsCount int
 	Description   string
+	// CreatedAt and UpdatedAt are the vault-recorded timestamps for the
+	// asset's earliest and latest versions. They may be the zero value when
+	// the underlying vault doesn't track timestamps for an entry.
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 func OpenSkillsNew(serverURL, authToken string) (*Client, error) {
@@ -155,10 +186,15 @@ func buildGitClientOptions(repoURL string, opts GitOptions) ([]git.ClientOption,
 	return gitOpts, nil
 }
 
-// EnsureBot creates the named bot if missing and updates its description when
-// it already exists. The returned string is a one-time raw bot API token only
-// when the backend creates a new bot and issues a token. It is empty when the
-// bot already exists and for file-backed Git vaults.
+// EnsureBot creates the named bot if missing and updates its description
+// when bot.Description is non-empty and differs from the stored value. An
+// empty bot.Description on an existing bot is a no-op — the stored
+// description is preserved, so repeated EnsureBot calls from agent-publish
+// flows don't rewrite the bot's identity.
+//
+// The returned string is a one-time raw bot API token only when the backend
+// creates a new bot and issues a token. It is empty when the bot already
+// exists and for file-backed Git vaults.
 func (c *Client) EnsureBot(ctx context.Context, bot Bot) (string, error) {
 	if c == nil || c.v == nil {
 		return "", errors.New("sxvault: nil client")
@@ -167,21 +203,22 @@ func (c *Client) EnsureBot(ctx context.Context, bot Bot) (string, error) {
 	if name == "" {
 		return "", errors.New("sxvault: bot name required")
 	}
+	desc := strings.TrimSpace(bot.Description)
 	ctx = c.actorContext(ctx)
 	existing, err := c.v.GetBot(ctx, name)
 	if err == nil {
-		if existing.Description != strings.TrimSpace(bot.Description) {
-			existing.Description = strings.TrimSpace(bot.Description)
-			return "", c.v.UpdateBot(ctx, *existing)
+		if desc == "" || existing.Description == desc {
+			return "", nil
 		}
-		return "", nil
+		existing.Description = desc
+		return "", c.v.UpdateBot(ctx, *existing)
 	}
 	if !errors.Is(err, mgmt.ErrBotNotFound) {
 		return "", err
 	}
 	return c.v.CreateBot(ctx, mgmt.Bot{
 		Name:        name,
-		Description: strings.TrimSpace(bot.Description),
+		Description: desc,
 	})
 }
 
@@ -199,11 +236,22 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 	spec.BotName = strings.TrimSpace(spec.BotName)
 	spec.AssetName = strings.TrimSpace(spec.AssetName)
 	spec.Version = strings.TrimSpace(spec.Version)
+	spec.Prompt = strings.TrimSpace(spec.Prompt)
 	if spec.BotName == "" || spec.AssetName == "" || spec.Version == "" {
 		return AgentResult{}, errors.New("sxvault: bot name, asset name, and version are required")
 	}
+	if spec.Prompt == "" {
+		return AgentResult{}, errors.New("sxvault: agent prompt is required")
+	}
 	ctx = c.actorContext(ctx)
-	botKey, err := c.EnsureBot(ctx, Bot{Name: spec.BotName, Description: spec.Description})
+	skills := cleanNames(spec.Skills)
+	for _, skill := range skills {
+		versions, vErr := c.v.GetVersionList(ctx, skill)
+		if vErr != nil || len(versions) == 0 {
+			return AgentResult{}, fmt.Errorf("sxvault: skill %q not found in vault", skill)
+		}
+	}
+	botKey, err := c.EnsureBot(ctx, Bot{Name: spec.BotName, Description: spec.BotDescription})
 	if err != nil {
 		return AgentResult{}, err
 	}
@@ -218,7 +266,7 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 	if err := c.InstallAssetToBot(ctx, spec.AssetName, spec.BotName); err != nil {
 		return AgentResult{}, err
 	}
-	for _, skill := range cleanNames(spec.Skills) {
+	for _, skill := range skills {
 		if err := c.InstallAssetToBot(ctx, skill, spec.BotName); err != nil {
 			return AgentResult{}, err
 		}
@@ -300,7 +348,10 @@ func (c *Client) ListAssetsWithOptions(ctx context.Context, opts ListOptions) ([
 			Name:          a.Name,
 			Type:          a.Type.Key,
 			LatestVersion: a.LatestVersion,
+			VersionsCount: a.VersionsCount,
 			Description:   a.Description,
+			CreatedAt:     a.CreatedAt,
+			UpdatedAt:     a.UpdatedAt,
 		})
 	}
 	return out, nil

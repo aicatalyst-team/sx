@@ -43,6 +43,11 @@ func LooksLikeHTTPRemote(repoURL string) bool {
 
 // DefaultHTTPAuthUsername returns a reasonable basic-auth username for a git
 // HTTP(S) token when the caller did not configure one explicitly.
+//
+// Host-based detection only covers gitlab.com and *.gitlab.com — self-hosted
+// GitLab instances on custom domains (gitlab.example.com, etc.) fall back to
+// "x-access-token", which GitLab rejects. Callers pointing at self-hosted
+// GitLab must pass explicit = "oauth2" to override.
 func DefaultHTTPAuthUsername(host, explicit string) string {
 	if explicit = strings.TrimSpace(explicit); explicit != "" {
 		return explicit

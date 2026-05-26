@@ -234,13 +234,66 @@ func TestPutAgentValidationErrors(t *testing.T) {
 	ctx := context.Background()
 	_, client := newGitVaultClient(t)
 	for _, spec := range []AgentSpec{
-		{AssetName: "agent", Version: "1.0.0"},
-		{BotName: "agent", Version: "1.0.0"},
-		{BotName: "agent", AssetName: "agent"},
+		{AssetName: "agent", Version: "1.0.0", Prompt: "p"},
+		{BotName: "agent", Version: "1.0.0", Prompt: "p"},
+		{BotName: "agent", AssetName: "agent", Prompt: "p"},
+		// Missing prompt must also fail — an agent with no instructions
+		// is silently broken if the publish succeeds.
+		{BotName: "agent", AssetName: "agent", Version: "1.0.0"},
+		{BotName: "agent", AssetName: "agent", Version: "1.0.0", Prompt: "   "},
 	} {
 		if _, err := client.PutAgent(ctx, spec); err == nil {
 			t.Fatalf("PutAgent(%+v) succeeded, want validation error", spec)
 		}
+	}
+}
+
+func TestPutAgentRejectsUnknownSkill(t *testing.T) {
+	ctx := context.Background()
+	_, client := newGitVaultClient(t)
+	_, err := client.PutAgent(ctx, AgentSpec{
+		BotName:   "reviewer",
+		AssetName: "reviewer",
+		Version:   "1.0.0",
+		Prompt:    "You are Reviewer.",
+		Skills:    []string{"missing-skill"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "missing-skill") {
+		t.Fatalf("PutAgent with unknown skill: err = %v, want error mentioning missing-skill", err)
+	}
+}
+
+func TestPutAgentPreservesBotDescriptionAcrossPublishes(t *testing.T) {
+	ctx := context.Background()
+	remote, client := newGitVaultClient(t)
+
+	// First publish seeds the bot description.
+	if _, err := client.PutAgent(ctx, AgentSpec{
+		BotName:        "reviewer",
+		AssetName:      "reviewer-a",
+		Version:        "1.0.0",
+		Description:    "Agent A description.",
+		BotDescription: "Reviews pull requests.",
+		Prompt:         "You are A.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Second publish provides only an agent Description (no BotDescription).
+	// The bot's identity description must be preserved, not blanked.
+	if _, err := client.PutAgent(ctx, AgentSpec{
+		BotName:     "reviewer",
+		AssetName:   "reviewer-b",
+		Version:     "1.0.0",
+		Description: "Agent B description.",
+		Prompt:      "You are B.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	clone := cloneRemote(t, remote)
+	manifest := readFile(t, filepath.Join(clone, "sx.toml"))
+	if !strings.Contains(manifest, `description = "Reviews pull requests."`) {
+		t.Fatalf("bot description was overwritten on second publish:\n%s", manifest)
 	}
 }
 
