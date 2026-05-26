@@ -3139,7 +3139,7 @@ interface VaultAsset {
 type VaultAssetVersion {
   version: String!
   isActive: Boolean!
-  createdAt: DateTime
+  createdAt: DateTime!
   createdByName: String
   filesCount: Int!
   changeSummary: String!
@@ -5459,7 +5459,7 @@ input RepositoryInstallationInput {
 }
 
 type RemoveAssetInstallationsMutation {
-  success: Boolean
+  success: Boolean!
   errors: [ErrorType!]!
 }
 
@@ -5628,7 +5628,7 @@ type UpdateFromCatalogMutation {
 }
 
 type RenameAssetMutation {
-  success: Boolean
+  success: Boolean!
   errors: [ErrorType!]!
 }
 
@@ -5638,7 +5638,7 @@ input RenameAssetInput {
 }
 
 type RefreshGitAssetMutation {
-  success: Boolean
+  success: Boolean!
   errors: [ErrorType!]!
 }
 
@@ -5882,7 +5882,7 @@ type UpdateSuggestedSkillStatusMutation {
 
 """Trigger a re-scan of all repositories for AI assets."""
 type TriggerAssetDiscoveryMutation {
-  success: Boolean
+  success: Boolean!
   errors: [ErrorType!]!
 }
 

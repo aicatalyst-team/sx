@@ -24,6 +24,7 @@ import (
 	"github.com/sleuth-io/sx/internal/logger"
 	"github.com/sleuth-io/sx/internal/metadata"
 	"github.com/sleuth-io/sx/internal/mgmt"
+	vaultgql "github.com/sleuth-io/sx/internal/vault/graphql"
 	"github.com/sleuth-io/sx/internal/version"
 )
 
@@ -421,136 +422,100 @@ func (s *SleuthVault) PostUsageStats(ctx context.Context, jsonlData string) erro
 // RemoveAsset removes an asset from the Sleuth server's lock file.
 // The delete flag is passed to the server mutation for permanent deletion.
 func (s *SleuthVault) RemoveAsset(ctx context.Context, assetName, version string, delete bool) error {
-	// Use removeAssetInstallations mutation to clear all installations
-	mutation := `mutation RemoveAssetInstallations($input: RemoveAssetInstallationsInput!) {
-		removeAssetInstallations(input: $input) {
-			success
-			errors {
-				field
-				messages
-			}
-		}
-	}`
-
 	if version != "" {
 		return errors.New("version-specific removal is not supported for Sleuth vaults")
 	}
 
-	input := map[string]any{
-		"assetName": assetName,
-	}
+	input := vaultgql.RemoveAssetInstallationsInput{AssetName: assetName}
+	// Only set Delete when the caller asked for permanent deletion, mirroring
+	// the old "omit when false" wire shape. Server-side default is false, so
+	// nil and false are equivalent on this field.
 	if delete {
-		input["delete"] = true
+		input.Delete = &delete
 	}
 
-	variables := map[string]any{
-		"input": input,
-	}
-
-	var gqlResp struct {
-		Data struct {
-			RemoveAssetInstallations struct {
-				Success *bool `json:"success"`
-				Errors  []struct {
-					Field    string   `json:"field"`
-					Messages []string `json:"messages"`
-				} `json:"errors"`
-			} `json:"removeAssetInstallations"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	if err := s.executeGraphQLQuery(ctx, mutation, variables, &gqlResp); err != nil {
+	resp, err := vaultgql.RemoveAssetInstallations(ctx, s.gqlClient(), input)
+	if err != nil {
 		return err
 	}
-
-	if len(gqlResp.Errors) > 0 {
-		return fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
+	if resp.RemoveAssetInstallations == nil {
+		return errors.New("missing removeAssetInstallations payload in response")
 	}
-
-	if len(gqlResp.Data.RemoveAssetInstallations.Errors) > 0 {
-		err := gqlResp.Data.RemoveAssetInstallations.Errors[0]
-		return fmt.Errorf("%s: %s", err.Field, err.Messages[0])
+	if err := gqlMutationErrors(resp.RemoveAssetInstallations.Errors); err != nil {
+		return err
 	}
-
-	if gqlResp.Data.RemoveAssetInstallations.Success == nil || !*gqlResp.Data.RemoveAssetInstallations.Success {
+	if !resp.RemoveAssetInstallations.Success {
 		return errors.New("failed to remove asset installations")
 	}
-
 	s.refreshLockFileCache()
 	return nil
 }
 
 // RenameAsset renames an asset on the Sleuth server using a GraphQL mutation.
 func (s *SleuthVault) RenameAsset(ctx context.Context, oldName, newName string) error {
-	mutation := `mutation RenameAsset($input: RenameAssetInput!) {
-		renameAsset(input: $input) {
-			success
-			errors {
-				field
-				messages
-			}
-		}
-	}`
-
-	variables := map[string]any{
-		"input": map[string]any{
-			"oldName": oldName,
-			"newName": newName,
-		},
-	}
-
-	var gqlResp struct {
-		Data struct {
-			RenameAsset struct {
-				Success *bool `json:"success"`
-				Errors  []struct {
-					Field    string   `json:"field"`
-					Messages []string `json:"messages"`
-				} `json:"errors"`
-			} `json:"renameAsset"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	if err := s.executeGraphQLQuery(ctx, mutation, variables, &gqlResp); err != nil {
+	resp, err := vaultgql.RenameAsset(ctx, s.gqlClient(), vaultgql.RenameAssetInput{
+		OldName: oldName,
+		NewName: newName,
+	})
+	if err != nil {
 		return err
 	}
-
-	if len(gqlResp.Errors) > 0 {
-		return fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
+	if resp.RenameAsset == nil {
+		return errors.New("missing renameAsset payload in response")
 	}
-
-	if len(gqlResp.Data.RenameAsset.Errors) > 0 {
-		err := gqlResp.Data.RenameAsset.Errors[0]
-		return fmt.Errorf("%s: %s", err.Field, err.Messages[0])
+	if err := gqlMutationErrors(resp.RenameAsset.Errors); err != nil {
+		return err
 	}
-
-	if gqlResp.Data.RenameAsset.Success == nil || !*gqlResp.Data.RenameAsset.Success {
+	if !resp.RenameAsset.Success {
 		return errors.New("failed to rename asset")
 	}
-
 	s.refreshLockFileCache()
 	return nil
 }
 
-// assetTypeToGraphQL maps local asset type keys to GraphQL AssetType enum values.
-// Returns empty string for types not supported by the backend.
-func assetTypeToGraphQL(typeKey string) string {
-	mapping := map[string]string{
-		"skill":              "SKILL",
-		"mcp":                "MCP",
-		"agent":              "AGENT",
-		"command":            "COMMAND",
-		"hook":               "HOOK",
-		"rule":               "RULE",
-		"claude-code-plugin": "CLAUDE_CODE_PLUGIN",
+// sxAssetTypeToGQL maps sx's internal asset.Type to the generated
+// vaultgql.AssetType enum. Returns the zero AssetType (empty string) for
+// asset kinds the backend doesn't model — callers should skip those.
+func sxAssetTypeToGQL(t asset.Type) vaultgql.AssetType {
+	switch t.Key {
+	case asset.TypeSkill.Key:
+		return vaultgql.AssetTypeSkill
+	case asset.TypeMCP.Key:
+		return vaultgql.AssetTypeMcp
+	case asset.TypeAgent.Key:
+		return vaultgql.AssetTypeAgent
+	case asset.TypeCommand.Key:
+		return vaultgql.AssetTypeCommand
+	case asset.TypeHook.Key:
+		return vaultgql.AssetTypeHook
+	case asset.TypeRule.Key:
+		return vaultgql.AssetTypeRule
+	case asset.TypeClaudeCodePlugin.Key:
+		return vaultgql.AssetTypeClaudeCodePlugin
 	}
-	return mapping[typeKey]
+	return ""
+}
+
+// gqlAssetTypeToSX is the inverse of sxAssetTypeToGQL. Returns the zero
+// asset.Type for unknown enum values so callers can detect via IsValid().
+func gqlAssetTypeToSX(t vaultgql.AssetType) asset.Type {
+	switch t {
+	case vaultgql.AssetTypeSkill:
+		return asset.TypeSkill
+	case vaultgql.AssetTypeMcp:
+		return asset.TypeMCP
+	case vaultgql.AssetTypeAgent:
+		return asset.TypeAgent
+	case vaultgql.AssetTypeCommand:
+		return asset.TypeCommand
+	case vaultgql.AssetTypeHook:
+		return asset.TypeHook
+	case vaultgql.AssetTypeRule:
+		return asset.TypeRule
+	case vaultgql.AssetTypeClaudeCodePlugin:
+		return asset.TypeClaudeCodePlugin
+	}
+	return asset.Type{Key: string(t)}
 }
 
 // ListAssets retrieves a list of all assets in the vault using GraphQL
@@ -561,7 +526,7 @@ func (s *SleuthVault) ListAssets(ctx context.Context, opts ListAssetsOptions) (*
 		var lastErr error
 		for _, t := range asset.AllTypes() {
 			// Skip types not supported by the backend
-			if assetTypeToGraphQL(t.Key) == "" {
+			if sxAssetTypeToGQL(t) == "" {
 				continue
 			}
 			typeOpts := ListAssetsOptions{
@@ -596,92 +561,41 @@ func (s *SleuthVault) listAssetsByType(ctx context.Context, opts ListAssetsOptio
 		limit = 50
 	}
 
-	gqlType := assetTypeToGraphQL(opts.Type)
+	gqlType := sxAssetTypeToGQL(asset.FromString(opts.Type))
 	if gqlType == "" {
 		// Type not supported by backend, return empty result
 		return &ListAssetsResult{Assets: []AssetSummary{}}, nil
 	}
 
-	variables := map[string]any{
-		"first": limit,
-		"type":  gqlType,
-	}
-
-	// Build query - type is always required
-	queryParams := "$first: Int, $type: AssetType!"
-	assetArgs := "first: $first, type: $type"
-
+	var searchPtr *string
 	if opts.Search != "" {
-		queryParams += ", $search: String"
-		assetArgs += ", search: $search"
-		variables["search"] = opts.Search
+		searchPtr = &opts.Search
 	}
 
-	query := fmt.Sprintf(`query VaultAssets(%s) {
-		vault {
-			assets(%s) {
-				nodes {
-					slug
-					type
-					latestVersion
-					versionsCount
-					description
-					createdAt
-					updatedAt
-				}
-			}
-		}
-	}`, queryParams, assetArgs)
-
-	// Make GraphQL request
-	var gqlResp struct {
-		Data struct {
-			Vault struct {
-				Assets struct {
-					Nodes []struct {
-						Slug          string    `json:"slug"`
-						Type          string    `json:"type"`
-						LatestVersion string    `json:"latestVersion"`
-						VersionsCount int       `json:"versionsCount"`
-						Description   string    `json:"description"`
-						CreatedAt     time.Time `json:"createdAt"`
-						UpdatedAt     time.Time `json:"updatedAt"`
-					} `json:"nodes"`
-				} `json:"assets"`
-			} `json:"vault"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	if err := s.executeGraphQLQuery(ctx, query, variables, &gqlResp); err != nil {
+	resp, err := vaultgql.VaultAssets(ctx, s.gqlClient(), &limit, gqlType, searchPtr)
+	if err != nil {
 		return nil, err
 	}
 
-	if len(gqlResp.Errors) > 0 {
-		return nil, fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
-	}
-
-	// Convert to result struct
+	// Convert to result struct. VaultAsset is a polymorphic interface;
+	// shared getters cover every concrete subtype (Skill, MCP, Agent, ...).
 	result := &ListAssetsResult{
-		Assets: make([]AssetSummary, 0, len(gqlResp.Data.Vault.Assets.Nodes)),
+		Assets: make([]AssetSummary, 0, len(resp.Vault.Assets.Nodes)),
 	}
-
-	for _, node := range gqlResp.Data.Vault.Assets.Nodes {
-		assetType := asset.FromString(strings.ToLower(node.Type))
+	for _, node := range resp.Vault.Assets.Nodes {
+		assetType := gqlAssetTypeToSX(node.GetType())
 		if !assetType.IsValid() {
 			log := logger.Get()
-			log.Warn("unknown asset type from GraphQL", "type", node.Type, "asset", node.Slug)
+			log.Warn("unknown asset type from GraphQL", "type", string(node.GetType()), "asset", node.GetSlug())
 		}
 		result.Assets = append(result.Assets, AssetSummary{
-			Name:          node.Slug,
+			Name:          node.GetSlug(),
 			Type:          assetType,
-			LatestVersion: node.LatestVersion,
-			VersionsCount: node.VersionsCount,
-			Description:   node.Description,
-			CreatedAt:     node.CreatedAt,
-			UpdatedAt:     node.UpdatedAt,
+			LatestVersion: node.GetLatestVersion(),
+			VersionsCount: node.GetVersionsCount(),
+			Description:   node.GetDescription(),
+			CreatedAt:     node.GetCreatedAt(),
+			UpdatedAt:     node.GetUpdatedAt(),
 		})
 	}
 
@@ -690,98 +604,36 @@ func (s *SleuthVault) listAssetsByType(ctx context.Context, opts ListAssetsOptio
 
 // GetAssetDetails retrieves detailed information about a specific asset using GraphQL
 func (s *SleuthVault) GetAssetDetails(ctx context.Context, name string) (*AssetDetails, error) {
-	// Search for the asset by name using the assets connection
-	query := `query VaultAsset($search: String!) {
-		vault {
-			assets(search: $search, first: 10) {
-				nodes {
-					name
-					type
-					description
-					createdAt
-					updatedAt
-					versions {
-						version
-						createdAt
-						filesCount
-					}
-				}
-			}
-		}
-	}`
-
-	variables := map[string]any{
-		"search": name,
-	}
-
-	// Make GraphQL request
-	var gqlResp struct {
-		Data struct {
-			Vault struct {
-				Assets struct {
-					Nodes []struct {
-						Name        string    `json:"name"`
-						Type        string    `json:"type"`
-						Description string    `json:"description"`
-						CreatedAt   time.Time `json:"createdAt"`
-						UpdatedAt   time.Time `json:"updatedAt"`
-						Versions    []struct {
-							Version    string    `json:"version"`
-							CreatedAt  time.Time `json:"createdAt"`
-							FilesCount int       `json:"filesCount"`
-						} `json:"versions"`
-					} `json:"nodes"`
-				} `json:"assets"`
-			} `json:"vault"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	if err := s.executeGraphQLQuery(ctx, query, variables, &gqlResp); err != nil {
+	resp, err := vaultgql.VaultAssetsByName(ctx, s.gqlClient(), name)
+	if err != nil {
 		return nil, err
 	}
 
-	if len(gqlResp.Errors) > 0 {
-		return nil, fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
-	}
-
-	// Find exact match by name
-	var assetData *struct {
-		Name        string    `json:"name"`
-		Type        string    `json:"type"`
-		Description string    `json:"description"`
-		CreatedAt   time.Time `json:"createdAt"`
-		UpdatedAt   time.Time `json:"updatedAt"`
-		Versions    []struct {
-			Version    string    `json:"version"`
-			CreatedAt  time.Time `json:"createdAt"`
-			FilesCount int       `json:"filesCount"`
-		} `json:"versions"`
-	}
-	for i, node := range gqlResp.Data.Vault.Assets.Nodes {
-		if node.Name == name {
-			assetData = &gqlResp.Data.Vault.Assets.Nodes[i]
+	// Find exact match by name. VaultAsset is a polymorphic interface
+	// (Skill/MCP/Agent/...); the shared getters cover every concrete subtype
+	// so we don't switch on type here.
+	var match vaultgql.VaultAssetsByNameVaultAssetsVaultAssetsConnectionNodesVaultAsset
+	for _, node := range resp.Vault.Assets.Nodes {
+		if node.GetName() == name {
+			match = node
 			break
 		}
 	}
-
-	if assetData == nil {
+	if match == nil {
 		return nil, fmt.Errorf("asset '%s' not found", name)
 	}
 
-	// Convert to result struct
+	versions := match.GetVersions()
 	details := &AssetDetails{
-		Name:        assetData.Name,
-		Type:        asset.FromString(assetData.Type),
-		Description: assetData.Description,
-		CreatedAt:   assetData.CreatedAt,
-		UpdatedAt:   assetData.UpdatedAt,
-		Versions:    make([]AssetVersion, 0, len(assetData.Versions)),
+		Name:        match.GetName(),
+		Type:        gqlAssetTypeToSX(match.GetType()),
+		Description: match.GetDescription(),
+		CreatedAt:   match.GetCreatedAt(),
+		UpdatedAt:   match.GetUpdatedAt(),
+		Versions:    make([]AssetVersion, 0, len(versions)),
 	}
 
-	for _, v := range assetData.Versions {
+	for _, v := range versions {
 		details.Versions = append(details.Versions, AssetVersion{
 			Version:    v.Version,
 			CreatedAt:  v.CreatedAt,
@@ -806,51 +658,6 @@ func (s *SleuthVault) GetAssetDetails(ctx context.Context, name string) (*AssetD
 	}
 
 	return details, nil
-}
-
-// QueryIntegration queries integrated services (GitHub, CircleCI, Linear) using natural language
-func (s *SleuthVault) QueryIntegration(ctx context.Context, query, integration string, gitContext any) (string, error) {
-	// Convert integration string to uppercase for Provider enum (github -> GITHUB)
-	provider := strings.ToUpper(integration)
-
-	gqlQuery := `query AiQuery($input: AiQueryInput!) {
-		aiQuery(input: $input) {
-			status
-			data
-			toolCallsMade
-		}
-	}`
-
-	variables := map[string]any{
-		"input": map[string]any{
-			"query":    query,
-			"provider": provider,
-			"context":  gitContext,
-		},
-	}
-
-	var gqlResp struct {
-		Data struct {
-			AiQuery struct {
-				Status        string   `json:"status"`
-				Data          string   `json:"data"`
-				ToolCallsMade []string `json:"toolCallsMade"`
-			} `json:"aiQuery"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	if err := s.executeGraphQLQuery(ctx, gqlQuery, variables, &gqlResp); err != nil {
-		return "", err
-	}
-
-	if len(gqlResp.Errors) > 0 {
-		return "", fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
-	}
-
-	return gqlResp.Data.AiQuery.Data, nil
 }
 
 // QueryIntegrationStream queries integrated services using SSE streaming.
@@ -1005,87 +812,50 @@ func (s *SleuthVault) executeGraphQLQuery(ctx context.Context, query string, var
 
 // SetInstallations sets the installation scopes for an asset using GraphQL mutation
 func (s *SleuthVault) SetInstallations(ctx context.Context, asset *lockfile.Asset, scopeEntity string) error {
-	mutation := `mutation SetAssetInstallations($input: SetAssetInstallationsInput!) {
-		setAssetInstallations(input: $input) {
-			asset {
-				name
-				latestVersion
-			}
-			errors {
-				field
-				messages
-			}
-		}
-	}`
-
-	// Build repositories list from asset scopes
-	var repositories []map[string]any
-
+	// Build repositories list from asset scopes. Empty slice means global install
+	// (server interprets repositories=[] as org-wide when personalOnly is false).
+	var repositories []vaultgql.RepositoryInstallationInput
 	if asset.IsGlobal() {
-		// Empty array for global installation
-		repositories = []map[string]any{}
+		repositories = []vaultgql.RepositoryInstallationInput{}
 	} else {
-		// Convert lockfile.Scope to repository installation format
 		for _, scope := range asset.Scopes {
-			repo := map[string]any{
-				"url": scope.Repo,
-			}
-			if len(scope.Paths) > 0 {
-				repo["paths"] = scope.Paths
-			}
-			repositories = append(repositories, repo)
+			repositories = append(repositories, vaultgql.RepositoryInstallationInput{
+				Url:   scope.Repo,
+				Paths: scope.Paths,
+			})
 		}
 	}
 
-	input := map[string]any{
-		"assetName":    asset.Name,
-		"assetVersion": asset.Version,
-		"repositories": repositories,
+	input := vaultgql.SetAssetInstallationsInput{
+		AssetName:    asset.Name,
+		AssetVersion: &asset.Version,
+		Repositories: repositories,
 	}
 	if scopeEntity == scopeEntityPersonal {
-		input["personalOnly"] = true
+		personalOnly := true
+		input.PersonalOnly = &personalOnly
 	}
 
-	variables := map[string]any{
-		"input": input,
+	resp, err := vaultgql.SetAssetInstallations(ctx, s.gqlClient(), input)
+	if err != nil {
+		// Preserve the friendly PERMISSION_DENIED message for the most
+		// common error mode (caller lacks write permission). The server
+		// surfaces it as a top-level GraphQL error string, which genqlient
+		// includes verbatim in the wrapped err.
+		if strings.Contains(err.Error(), "PERMISSION_DENIED") {
+			return fmt.Errorf("permission denied. Check that you have write permissions on %s", s.serverURL)
+		}
+		return err
 	}
-
-	var gqlResp struct {
-		Data struct {
-			SetAssetInstallations struct {
-				Asset *struct {
-					Name          string `json:"name"`
-					LatestVersion string `json:"latestVersion"`
-				} `json:"asset"`
-				Errors []struct {
-					Field    string   `json:"field"`
-					Messages []string `json:"messages"`
-				} `json:"errors"`
-			} `json:"setAssetInstallations"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
+	if resp.SetAssetInstallations == nil {
+		return errors.New("missing setAssetInstallations payload in response")
 	}
-
-	if err := s.executeGraphQLQuery(ctx, mutation, variables, &gqlResp); err != nil {
+	if err := gqlMutationErrors(resp.SetAssetInstallations.Errors); err != nil {
 		return err
 	}
 
-	if len(gqlResp.Errors) > 0 {
-		if gqlResp.Errors[0].Message == "PERMISSION_DENIED" {
-			return fmt.Errorf("permission denied. Check that you have write permissions on %s", s.serverURL)
-		}
-		return fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
-	}
-
-	if len(gqlResp.Data.SetAssetInstallations.Errors) > 0 {
-		err := gqlResp.Data.SetAssetInstallations.Errors[0]
-		return fmt.Errorf("%s: %s", err.Field, err.Messages[0])
-	}
-
-	// Invalidate lock file cache so next GetLockFile fetches fresh data
-	// This is best-effort - ignore errors
+	// Invalidate lock file cache so next GetLockFile fetches fresh data.
+	// This is best-effort - ignore errors.
 	_ = cache.InvalidateLockFileCache(s.serverURL)
 
 	return nil
