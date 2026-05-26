@@ -26,8 +26,12 @@ type Config struct {
 	// ServerURL is the Sleuth server URL (only for type=sleuth)
 	ServerURL string `json:"serverUrl,omitempty"`
 
-	// AuthToken is the OAuth token for Sleuth server (only for type=sleuth)
+	// AuthToken is the OAuth token for Sleuth server or an HTTPS git token.
 	AuthToken string `json:"authToken,omitempty"`
+
+	// AuthUsername is the HTTPS basic-auth username used with AuthToken for
+	// git repositories. Empty uses a host-specific default.
+	AuthUsername string `json:"authUsername,omitempty"`
 
 	// RepositoryURL is the repository URL
 	// - For git: git repository URL (https://github.com/org/repo.git)
@@ -215,6 +219,11 @@ func (c *Config) GetServerURL() string {
 // GetAuthToken returns the auth token
 func (c *Config) GetAuthToken() string {
 	return c.AuthToken
+}
+
+// GetAuthUsername returns the git HTTPS basic-auth username.
+func (c *Config) GetAuthUsername() string {
+	return c.AuthUsername
 }
 
 // GetRepositoryURL returns the repository URL

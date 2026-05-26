@@ -2,7 +2,6 @@ package vault
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 
 	"github.com/sleuth-io/sx/internal/git"
@@ -17,6 +16,10 @@ type Config interface {
 	GetRepositoryURL() string
 }
 
+type authUsernameConfig interface {
+	GetAuthUsername() string
+}
+
 // NewFromConfig creates a vault instance from configuration
 // This factory function eliminates repetitive switch statements across commands
 func NewFromConfig(cfg Config) (Vault, error) {
@@ -26,8 +29,13 @@ func NewFromConfig(cfg Config) (Vault, error) {
 	case "git":
 		opts := []GitVaultOption(nil)
 		if tok := strings.TrimSpace(cfg.GetAuthToken()); tok != "" {
-			if host := gitAuthHost(cfg.GetRepositoryURL()); host != "" {
-				opts = append(opts, WithGitClient(git.NewClientWithOptions(git.WithHTTPSBasicAuth(host, "x-access-token", tok))))
+			info := git.ParseRemoteAuthInfo(cfg.GetRepositoryURL())
+			if info.HTTPS {
+				opts = append(opts, WithGitClient(git.NewClientWithOptions(git.WithHTTPSBasicAuth(
+					info.Host,
+					git.DefaultHTTPSAuthUsername(info.Host, authUsername(cfg)),
+					tok,
+				))))
 			}
 		}
 		return NewGitVaultWithOptions(cfg.GetRepositoryURL(), opts...)
@@ -38,13 +46,9 @@ func NewFromConfig(cfg Config) (Vault, error) {
 	}
 }
 
-func gitAuthHost(repoURL string) string {
-	u, err := url.Parse(repoURL)
-	if err == nil && u.Host != "" && u.Scheme == "https" {
-		return u.Host
-	}
-	if strings.HasPrefix(repoURL, "git@github.com:") {
-		return "github.com"
+func authUsername(cfg Config) string {
+	if cfg, ok := cfg.(authUsernameConfig); ok {
+		return cfg.GetAuthUsername()
 	}
 	return ""
 }

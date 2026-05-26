@@ -7,12 +7,9 @@ import (
 	"os/exec"
 )
 
-// execGitCommand creates a git command with optional SSH key configuration
+// execGitCommandWithEnv creates a git command with optional SSH key
+// configuration and extra environment values.
 // Returns the command ready to be executed (caller must call .Run(), .Output(), or .CombinedOutput())
-func execGitCommand(ctx context.Context, sshKeyPath string, args ...string) *exec.Cmd {
-	return execGitCommandWithEnv(ctx, sshKeyPath, nil, args...)
-}
-
 func execGitCommandWithEnv(ctx context.Context, sshKeyPath string, extraEnv []string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", args...)
 
@@ -41,13 +38,10 @@ func execGitCommandWithEnv(ctx context.Context, sshKeyPath string, extraEnv []st
 	return cmd
 }
 
-// execGitCommandWithURL prepares a git command with URL conversion if needed
-// If sshKeyPath is provided and URL is HTTPS, converts URL to SSH
-// Returns the command, the final URL used, and any error
-func execGitCommandWithURL(ctx context.Context, sshKeyPath, url string, args ...string) (*exec.Cmd, string, error) {
-	return execGitCommandWithURLAndEnv(ctx, sshKeyPath, nil, url, args...)
-}
-
+// execGitCommandWithURLAndEnv prepares a git command with URL conversion if
+// needed and extra environment values.
+// If sshKeyPath is provided and URL is HTTPS, converts URL to SSH.
+// Returns the command, the final URL used, and any error.
 func execGitCommandWithURLAndEnv(ctx context.Context, sshKeyPath string, extraEnv []string, url string, args ...string) (*exec.Cmd, string, error) {
 	finalURL := url
 

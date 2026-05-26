@@ -25,8 +25,16 @@ type Actor struct {
 }
 
 type GitOptions struct {
+	// AuthToken authenticates HTTPS git remotes through basic auth. SSH
+	// remotes ignore this value and use the caller's SSH configuration.
 	AuthToken string
-	Actor     Actor
+
+	// AuthUsername is the HTTPS basic-auth username to pair with AuthToken.
+	// Empty uses a host-specific default, currently "x-access-token" except
+	// GitLab hosts, which use "oauth2".
+	AuthUsername string
+
+	Actor Actor
 }
 
 type Client struct {
@@ -50,6 +58,9 @@ type AgentSpec struct {
 }
 
 type AgentResult struct {
+	// BotKey is the one-time raw bot API token returned only when PutAgent
+	// creates a new bot in a vault type that issues bot tokens. It is empty
+	// when the bot already exists and for file-backed Git vaults.
 	BotKey string
 }
 
@@ -72,7 +83,18 @@ func OpenSkillsNew(serverURL, authToken string) (*Client, error) {
 	if serverURL == "" {
 		serverURL = DefaultSkillsNewURL
 	}
-	return &Client{v: vault.NewSleuthVault(serverURL, strings.TrimSpace(authToken))}, nil
+	authToken = strings.TrimSpace(authToken)
+	if authToken == "" {
+		return nil, errors.New("sxvault: skills.new auth token required")
+	}
+	u, err := url.Parse(serverURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("sxvault: invalid skills.new server URL %q", serverURL)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("sxvault: invalid skills.new server URL scheme %q", u.Scheme)
+	}
+	return &Client{v: vault.NewSleuthVault(serverURL, authToken)}, nil
 }
 
 func OpenGit(repoURL string, opts GitOptions) (*Client, error) {
@@ -82,11 +104,12 @@ func OpenGit(repoURL string, opts GitOptions) (*Client, error) {
 	}
 	gitOpts := []git.ClientOption{git.WithCommitActor(opts.Actor.Name, opts.Actor.Email)}
 	if tok := strings.TrimSpace(opts.AuthToken); tok != "" {
-		host := gitAuthHost(repoURL)
-		if host == "" {
+		info := git.ParseRemoteAuthInfo(repoURL)
+		if info.HTTPS {
+			gitOpts = append(gitOpts, git.WithHTTPSBasicAuth(info.Host, git.DefaultHTTPSAuthUsername(info.Host, opts.AuthUsername), tok))
+		} else if git.LooksLikeHTTPSRemote(repoURL) {
 			return nil, fmt.Errorf("sxvault: cannot derive git auth host from %q", repoURL)
 		}
-		gitOpts = append(gitOpts, git.WithHTTPSBasicAuth(host, "x-access-token", tok))
 	}
 	gv, err := vault.NewGitVaultWithOptions(repoURL, vault.WithGitClient(git.NewClientWithOptions(gitOpts...)))
 	if err != nil {
@@ -95,6 +118,10 @@ func OpenGit(repoURL string, opts GitOptions) (*Client, error) {
 	return &Client{v: gv, actor: opts.Actor}, nil
 }
 
+// EnsureBot creates the named bot if missing and updates its description when
+// it already exists. The returned string is a one-time raw bot API token only
+// when the backend creates a new bot and issues a token. It is empty when the
+// bot already exists and for file-backed Git vaults.
 func (c *Client) EnsureBot(ctx context.Context, bot Bot) (string, error) {
 	if c == nil || c.v == nil {
 		return "", errors.New("sxvault: nil client")
@@ -310,15 +337,4 @@ func cleanNames(in []string) []string {
 		out = append(out, v)
 	}
 	return out
-}
-
-func gitAuthHost(repoURL string) string {
-	u, err := url.Parse(repoURL)
-	if err == nil && u.Scheme == "https" && u.Host != "" {
-		return u.Host
-	}
-	if strings.HasPrefix(repoURL, "git@github.com:") {
-		return "github.com"
-	}
-	return ""
 }

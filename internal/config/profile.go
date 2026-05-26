@@ -24,8 +24,12 @@ type Profile struct {
 	// ServerURL is the Sleuth server URL (only for type=sleuth)
 	ServerURL string `json:"serverUrl,omitempty"`
 
-	// AuthToken is the OAuth token for Sleuth server (only for type=sleuth)
+	// AuthToken is the OAuth token for Sleuth server or an HTTPS git token.
 	AuthToken string `json:"authToken,omitempty"`
+
+	// AuthUsername is the HTTPS basic-auth username used with AuthToken for
+	// git repositories. Empty uses a host-specific default.
+	AuthUsername string `json:"authUsername,omitempty"`
 
 	// RepositoryURL is the repository URL
 	// - For git: git repository URL (https://github.com/org/repo.git)
@@ -211,6 +215,7 @@ func migrateOldConfig(data []byte) (*MultiProfileConfig, error) {
 		Type           RepositoryType `json:"type"`
 		ServerURL      string         `json:"serverUrl,omitempty"`
 		AuthToken      string         `json:"authToken,omitempty"`
+		AuthUsername   string         `json:"authUsername,omitempty"`
 		RepositoryURL  string         `json:"repositoryUrl,omitempty"`
 		EnabledClients []string       `json:"enabledClients,omitempty"`
 	}
@@ -227,6 +232,7 @@ func migrateOldConfig(data []byte) (*MultiProfileConfig, error) {
 				Type:          oldCfg.Type,
 				ServerURL:     oldCfg.ServerURL,
 				AuthToken:     oldCfg.AuthToken,
+				AuthUsername:  oldCfg.AuthUsername,
 				RepositoryURL: oldCfg.RepositoryURL,
 			},
 		},
@@ -268,6 +274,7 @@ type backwardsCompatibleConfig struct {
 	Type           RepositoryType `json:"type,omitempty"`
 	ServerURL      string         `json:"serverUrl,omitempty"`
 	AuthToken      string         `json:"authToken,omitempty"`
+	AuthUsername   string         `json:"authUsername,omitempty"`
 	RepositoryURL  string         `json:"repositoryUrl,omitempty"`
 	EnabledClients []string       `json:"enabledClients,omitempty"` // DEPRECATED
 
@@ -314,6 +321,7 @@ func SaveMultiProfile(mpc *MultiProfileConfig) error {
 		compat.Type = activeProfile.Type
 		compat.ServerURL = activeProfile.ServerURL
 		compat.AuthToken = activeProfile.AuthToken
+		compat.AuthUsername = activeProfile.AuthUsername
 		compat.RepositoryURL = activeProfile.RepositoryURL
 	}
 
@@ -534,6 +542,7 @@ func (p *Profile) ToConfig(forceEnabled, forceDisabled []string) *Config {
 		Type:                 p.Type,
 		ServerURL:            p.ServerURL,
 		AuthToken:            p.AuthToken,
+		AuthUsername:         p.AuthUsername,
 		RepositoryURL:        p.RepositoryURL,
 		Identity:             p.Identity,
 		ForceEnabledClients:  forceEnabled,
@@ -547,6 +556,7 @@ func ProfileFromConfig(cfg *Config) *Profile {
 		Type:          cfg.Type,
 		ServerURL:     cfg.ServerURL,
 		AuthToken:     cfg.AuthToken,
+		AuthUsername:  cfg.AuthUsername,
 		RepositoryURL: cfg.RepositoryURL,
 		Identity:      cfg.Identity,
 	}
