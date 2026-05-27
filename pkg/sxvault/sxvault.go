@@ -1,4 +1,13 @@
 // Package sxvault exposes a small, stable management facade over SX vaults.
+//
+// Scope: this facade currently covers the publish / manage write path
+// (OpenSkillsNew / OpenGit / OpenPath constructors; EnsureBot, PutAgent,
+// PutSkillZip, InstallAssetToBot mutators; ListAssets read-only browse).
+// Read-side primitives that the internal vault.Vault interface supports —
+// GetMetadata, GetAssetByVersion, RemoveAsset, RenameAsset, asset-uninstall —
+// are intentionally NOT re-exported yet and are reserved for a follow-up
+// release once consumer needs are clearer. Library consumers needing them
+// today should treat the absence as a "not yet" rather than a "never."
 package sxvault
 
 import (
@@ -193,6 +202,22 @@ func OpenSkillsNewWithOptions(serverURL string, opts SkillsNewOptions) (*Client,
 	return &Client{v: vault.NewSleuthVault(serverURL, authToken), actor: opts.Actor}, nil
 }
 
+// OpenPath opens a file-backed vault rooted at dir. The directory must
+// already exist; the underlying PathVault treats absent directories as a
+// hard error rather than auto-creating. Path vaults don't carry auth or an
+// actor — local filesystem access is the trust boundary.
+func OpenPath(dir string, actor Actor) (*Client, error) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return nil, errors.New("sxvault: path required")
+	}
+	pv, err := vault.NewPathVault("file://" + dir)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{v: pv, actor: actor}, nil
+}
+
 func OpenGit(repoURL string, opts GitOptions) (*Client, error) {
 	repoURL = strings.TrimSpace(repoURL)
 	if repoURL == "" {
@@ -215,22 +240,22 @@ func OpenGit(repoURL string, opts GitOptions) (*Client, error) {
 // Extracted so tests can assert on the resulting client env via the public
 // git.Client.ExtraEnv accessor without reaching into vault internals.
 func buildGitClientOptions(repoURL string, opts GitOptions) ([]git.ClientOption, error) {
+	info := git.ParseRemoteAuthInfo(repoURL)
+	// Reject a URL that looks like HTTP(S) but doesn't parse cleanly,
+	// regardless of whether a token was supplied. Otherwise a malformed
+	// URL with no token would silently sail past OpenGit and only fail at
+	// clone time with a less actionable error.
+	if !info.HTTP && git.LooksLikeHTTPRemote(repoURL) {
+		return nil, fmt.Errorf("sxvault: malformed git URL %q", repoURL)
+	}
 	gitOpts := []git.ClientOption{git.WithCommitActor(opts.Actor.Name, opts.Actor.Email)}
 	sshKey := strings.TrimSpace(opts.SSHKeyPath)
-	if tok := strings.TrimSpace(opts.AuthToken); tok != "" {
-		info := git.ParseRemoteAuthInfo(repoURL)
-		switch {
-		case info.HTTP && sshKey != "":
-			// SSH key wins: the git client rewrites HTTP(S) → SSH at
-			// clone time and the basic-auth extraheader env never
-			// runs. Skip WithHTTPBasicAuth so the client doesn't carry
-			// inert credentials that misrepresent what git actually
-			// uses.
-		case info.HTTP:
-			gitOpts = append(gitOpts, git.WithHTTPBasicAuth(info.Scheme, info.Host, git.DefaultHTTPAuthUsername(info.Host, opts.AuthUsername), tok))
-		case git.LooksLikeHTTPRemote(repoURL):
-			return nil, fmt.Errorf("sxvault: cannot derive git auth host from %q", repoURL)
-		}
+	if tok := strings.TrimSpace(opts.AuthToken); tok != "" && info.HTTP && sshKey == "" {
+		// SSH key takes precedence on HTTP(S): the git client rewrites
+		// HTTP(S) → SSH at clone time so the basic-auth extraheader env
+		// never runs. When SSHKeyPath is unset, we wire the basic-auth
+		// env through normally.
+		gitOpts = append(gitOpts, git.WithHTTPBasicAuth(info.Scheme, info.Host, git.DefaultHTTPAuthUsername(info.Host, opts.AuthUsername), tok))
 	}
 	if sshKey != "" {
 		gitOpts = append(gitOpts, git.WithSSHKey(sshKey))
@@ -242,7 +267,11 @@ func buildGitClientOptions(repoURL string, opts GitOptions) ([]git.ClientOption,
 // when bot.Description is non-empty and differs from the stored value. An
 // empty bot.Description on an existing bot is a no-op — the stored
 // description is preserved, so repeated EnsureBot calls from agent-publish
-// flows don't rewrite the bot's identity.
+// flows don't rewrite the bot's identity. On the create path (bot does
+// not yet exist) EnsureBot REJECTS an empty bot.Description with an
+// error: creating an identity-less bot is almost never what the caller
+// wants, and the "empty preserves" semantic only makes sense once an
+// identity is already in place.
 //
 // The returned string is a one-time raw bot API token only when the backend
 // creates a new bot and issues a token. It is empty when the bot already
@@ -267,6 +296,9 @@ func (c *Client) EnsureBot(ctx context.Context, bot Bot) (string, error) {
 	}
 	if !errors.Is(err, mgmt.ErrBotNotFound) {
 		return "", err
+	}
+	if desc == "" {
+		return "", fmt.Errorf("sxvault: bot description required when creating bot %q", name)
 	}
 	return c.v.CreateBot(ctx, mgmt.Bot{
 		Name:        name,
@@ -308,35 +340,25 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 	}
 	ctx = c.actorContext(ctx)
 	skills := cleanNames(spec.Skills)
-	for _, skill := range skills {
-		versions, vErr := c.v.GetVersionList(ctx, skill)
-		if vErr != nil {
-			return AgentResult{}, fmt.Errorf("sxvault: checking skill %q: %w", skill, vErr)
+	if len(skills) > 0 {
+		// Pull the skill-typed assets in one call instead of looping
+		// GetVersionList + GetMetadata per name + per version. The set
+		// reflects the latest version's type per asset, which matches
+		// how InstallAssetToBot routes (by name, not by version): an
+		// asset whose latest release is no longer type=skill should not
+		// be installable as one.
+		known, lErr := c.v.ListAssets(ctx, vault.ListAssetsOptions{Type: asset.TypeSkill.Key})
+		if lErr != nil {
+			return AgentResult{}, fmt.Errorf("sxvault: listing skills: %w", lErr)
 		}
-		if len(versions) == 0 {
-			return AgentResult{}, fmt.Errorf("sxvault: skill %q not found in vault", skill)
+		present := make(map[string]struct{}, len(known.Assets))
+		for _, a := range known.Assets {
+			present[a.Name] = struct{}{}
 		}
-		// InstallAssetToBot references the asset by name, not by version, so
-		// the name is "a skill" when ANY version was published as type=skill.
-		// Iterate newest-published first so the common case (latest version
-		// is the real one) costs one metadata fetch. The version list is
-		// append-ordered, not semver-sorted — a backport published after a
-		// later release would otherwise mis-classify on the last entry.
-		var lastTypeKey string
-		isSkill := false
-		for i := len(versions) - 1; i >= 0; i-- {
-			meta, mErr := c.v.GetMetadata(ctx, skill, versions[i])
-			if mErr != nil {
-				return AgentResult{}, fmt.Errorf("sxvault: reading metadata for %q: %w", skill, mErr)
+		for _, skill := range skills {
+			if _, ok := present[skill]; !ok {
+				return AgentResult{}, fmt.Errorf("sxvault: skill %q not found in vault", skill)
 			}
-			lastTypeKey = meta.Asset.Type.Key
-			if lastTypeKey == asset.TypeSkill.Key {
-				isSkill = true
-				break
-			}
-		}
-		if !isSkill {
-			return AgentResult{}, fmt.Errorf("sxvault: %q is type %q, not skill", skill, lastTypeKey)
 		}
 	}
 	botKey, err := c.EnsureBot(ctx, Bot{Name: spec.BotName, Description: spec.BotDescription})

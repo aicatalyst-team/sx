@@ -19,11 +19,12 @@ func TestGitPutAgentWritesSXVaultFormat(t *testing.T) {
 	ctx := context.Background()
 	remote, client := newGitVaultClient(t)
 	if _, err := client.PutAgent(ctx, AgentSpec{
-		BotName:     "reviewer",
-		AssetName:   "reviewer",
-		Version:     "1.0.0",
-		Description: "Reviews pull requests.",
-		Prompt:      "You are Reviewer.",
+		BotName:        "reviewer",
+		AssetName:      "reviewer",
+		Version:        "1.0.0",
+		Description:    "Reviews pull requests.",
+		BotDescription: "Reviewer bot.",
+		Prompt:         "You are Reviewer.",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -71,11 +72,12 @@ func TestPutAgentSameVersionIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	remote, client := newGitVaultClient(t)
 	spec := AgentSpec{
-		BotName:     "reviewer",
-		AssetName:   "reviewer",
-		Version:     "1.0.0",
-		Description: "Reviews pull requests.",
-		Prompt:      "You are Reviewer.",
+		BotName:        "reviewer",
+		AssetName:      "reviewer",
+		Version:        "1.0.0",
+		Description:    "Reviews pull requests.",
+		BotDescription: "Reviewer bot.",
+		Prompt:         "You are Reviewer.",
 	}
 	if _, err := client.PutAgent(ctx, spec); err != nil {
 		t.Fatal(err)
@@ -254,11 +256,12 @@ func TestPutAgentRejectsUnknownSkill(t *testing.T) {
 	ctx := context.Background()
 	_, client := newGitVaultClient(t)
 	_, err := client.PutAgent(ctx, AgentSpec{
-		BotName:   "reviewer",
-		AssetName: "reviewer",
-		Version:   "1.0.0",
-		Prompt:    "You are Reviewer.",
-		Skills:    []string{"missing-skill"},
+		BotName:        "reviewer",
+		AssetName:      "reviewer",
+		Version:        "1.0.0",
+		BotDescription: "Reviewer bot.",
+		Prompt:         "You are Reviewer.",
+		Skills:         []string{"missing-skill"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "missing-skill") {
 		t.Fatalf("PutAgent with unknown skill: err = %v, want error mentioning missing-skill", err)
@@ -271,14 +274,18 @@ func TestPutAgentRejectsSkillsEntryOfWrongType(t *testing.T) {
 
 	// Seed an agent — its name must not be usable as a Skills entry.
 	if _, err := client.PutAgent(ctx, AgentSpec{
-		BotName:     "reviewer",
-		AssetName:   "secondary-agent",
-		Version:     "1.0.0",
-		Description: "Secondary agent.",
-		Prompt:      "You are secondary.",
+		BotName:        "reviewer",
+		AssetName:      "secondary-agent",
+		Version:        "1.0.0",
+		Description:    "Secondary agent.",
+		BotDescription: "Reviewer bot.",
+		Prompt:         "You are secondary.",
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// The skill pre-check filters the vault's skill set, so an agent name
+	// fails as "not found in vault" — same publish-rejection outcome as
+	// the wrong-type case from the caller's perspective.
 	_, err := client.PutAgent(ctx, AgentSpec{
 		BotName:   "reviewer",
 		AssetName: "main-agent",
@@ -286,8 +293,50 @@ func TestPutAgentRejectsSkillsEntryOfWrongType(t *testing.T) {
 		Prompt:    "You are main.",
 		Skills:    []string{"secondary-agent"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "secondary-agent") || !strings.Contains(err.Error(), "not skill") {
-		t.Fatalf("PutAgent with agent in Skills: err = %v, want wrong-type error", err)
+	if err == nil || !strings.Contains(err.Error(), "secondary-agent") || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("PutAgent with agent in Skills: err = %v, want skill-not-found error", err)
+	}
+}
+
+func TestEnsureBotRejectsEmptyDescriptionOnCreate(t *testing.T) {
+	ctx := context.Background()
+	_, client := newGitVaultClient(t)
+
+	// Creating with empty description fails up front rather than producing
+	// an anonymous bot that nothing later catches.
+	if _, err := client.EnsureBot(ctx, Bot{Name: "anon"}); err == nil || !strings.Contains(err.Error(), "anon") {
+		t.Fatalf("EnsureBot create-with-empty-desc: err = %v, want bot-description error", err)
+	}
+	// Seed the bot, then ensure-bot with empty desc is a no-op (preserve).
+	if _, err := client.EnsureBot(ctx, Bot{Name: "anon", Description: "Anon bot."}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.EnsureBot(ctx, Bot{Name: "anon"}); err != nil {
+		t.Fatalf("EnsureBot existing-with-empty-desc: %v", err)
+	}
+}
+
+func TestOpenPathRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	client, err := OpenPath(dir, Actor{Email: "test@example.com"})
+	if err != nil {
+		t.Fatalf("OpenPath: %v", err)
+	}
+	if err := client.PutSkillZip(ctx, SkillZipSpec{
+		Name:    "lint-helper",
+		Version: "1.0.0",
+		ZipData: skillZip(t, "Lint carefully."),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertFileContains(t, filepath.Join(dir, "assets", "lint-helper", "1.0.0", "SKILL.md"), "Lint carefully.")
+
+	if _, err := OpenPath("", Actor{}); err == nil {
+		t.Fatal("OpenPath with empty path succeeded, want error")
+	}
+	if _, err := OpenPath(filepath.Join(dir, "missing-dir"), Actor{}); err == nil {
+		t.Fatal("OpenPath against nonexistent dir succeeded, want error")
 	}
 }
 
@@ -368,6 +417,12 @@ func TestBuildGitClientOptionsAuthTokenRouting(t *testing.T) {
 	}
 	if _, err := buildGitClientOptions("https:///org/repo.git", GitOptions{AuthToken: "token"}); err == nil {
 		t.Fatal("malformed HTTPS remote with token succeeded, want error")
+	}
+	// Same malformed URL with no token must also fail — URL validity is
+	// orthogonal to auth, and silently accepting the bad URL would defer
+	// the error to git clone time.
+	if _, err := buildGitClientOptions("https:///org/repo.git", GitOptions{}); err == nil {
+		t.Fatal("malformed HTTPS remote without token succeeded, want error")
 	}
 	httpEnv := envFromOptions(t, "http://git.example.test/org/repo.git", GitOptions{AuthToken: "token"})
 	if !strings.Contains(strings.Join(httpEnv, "\n"), "http.http://git.example.test/.extraheader") {
