@@ -178,6 +178,43 @@ func TestAddFileToZipPreservesExecutableBit(t *testing.T) {
 	}
 }
 
+func TestRemoveFilesFromZip(t *testing.T) {
+	zipData := createTestZip(t, map[string]string{
+		"keep.md":  "k",
+		"drop.md":  "d",
+		"drop2.md": "d2",
+	})
+
+	got, err := RemoveFilesFromZip(zipData, "drop.md", "drop2.md", "absent.md")
+	if err != nil {
+		t.Fatalf("RemoveFilesFromZip: %v", err)
+	}
+
+	files, err := ListZipFiles(got)
+	if err != nil {
+		t.Fatalf("ListZipFiles: %v", err)
+	}
+	names := map[string]bool{}
+	for _, f := range files {
+		names[f] = true
+	}
+	if !names["keep.md"] {
+		t.Errorf("expected keep.md present, got %v", files)
+	}
+	if names["drop.md"] || names["drop2.md"] {
+		t.Errorf("expected drop.md/drop2.md absent, got %v", files)
+	}
+
+	// Empty names list is a no-op (zip bytes unchanged).
+	got2, err := RemoveFilesFromZip(zipData)
+	if err != nil {
+		t.Fatalf("RemoveFilesFromZip empty: %v", err)
+	}
+	if !bytes.Equal(got2, zipData) {
+		t.Error("expected RemoveFilesFromZip with no names to be a no-op")
+	}
+}
+
 func TestRenameFileInZip(t *testing.T) {
 	t.Run("renames matched entry and drops collision", func(t *testing.T) {
 		zipData := createTestZip(t, map[string]string{

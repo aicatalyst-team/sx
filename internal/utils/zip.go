@@ -431,6 +431,42 @@ func ReplaceFileInZip(zipData []byte, filename string, content []byte) ([]byte, 
 	return AddFileToZip(zipData, filename, content)
 }
 
+// RemoveFilesFromZip returns a copy of zipData with every entry whose name is
+// in names omitted. Unknown names are ignored.
+func RemoveFilesFromZip(zipData []byte, names ...string) ([]byte, error) {
+	if len(names) == 0 {
+		return zipData, nil
+	}
+	if !IsZipFile(zipData) {
+		return nil, errors.New("invalid zip file: missing magic bytes")
+	}
+
+	drop := make(map[string]bool, len(names))
+	for _, n := range names {
+		drop[n] = true
+	}
+
+	reader, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read zip: %w", err)
+	}
+
+	buf := new(bytes.Buffer)
+	writer := zip.NewWriter(buf)
+	for _, file := range reader.File {
+		if drop[file.Name] {
+			continue
+		}
+		if err := copyZipFile(writer, file); err != nil {
+			return nil, fmt.Errorf("failed to copy file %s: %w", file.Name, err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close zip writer: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 // RenameFileInZip rewrites zipData with oldName renamed to newName. It is a
 // no-op when oldName is absent or already equals newName. If newName already
 // exists alongside oldName, the existing newName entry is dropped in favor of

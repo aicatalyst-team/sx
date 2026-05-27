@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/sleuth-io/sx/internal/asset"
@@ -34,6 +35,13 @@ var canonicalPromptFilenames = map[string]string{
 // the lowercase form, its prompt-file field is silently rewritten — keeping
 // file and metadata in lockstep ensures every client (some of which only
 // recognize the canonical name) sees a working install.
+//
+// Collision rules when multiple case-insensitive variants are present (rare,
+// only possible on case-sensitive filesystems):
+//   - The canonical entry, if present, always wins — its content is preserved
+//     and any stray variants are dropped.
+//   - If only variants exist, the lexicographically first one is renamed to
+//     canonical and the rest are dropped, so the chosen content is deterministic.
 func normalizePromptFileCase(zipData []byte, assetType asset.Type) ([]byte, error) {
 	canonical, ok := canonicalPromptFilenames[assetType.Key]
 	if !ok {
@@ -45,7 +53,7 @@ func normalizePromptFileCase(zipData []byte, assetType asset.Type) ([]byte, erro
 		return nil, fmt.Errorf("failed to list zip files: %w", err)
 	}
 
-	var actualFile string
+	var variants []string
 	canonicalPresent := false
 	for _, f := range files {
 		if f == canonical {
@@ -53,16 +61,36 @@ func normalizePromptFileCase(zipData []byte, assetType asset.Type) ([]byte, erro
 			continue
 		}
 		if strings.EqualFold(f, canonical) {
-			actualFile = f
+			variants = append(variants, f)
 		}
 	}
 
-	if actualFile != "" {
-		zipData, err = utils.RenameFileInZip(zipData, actualFile, canonical)
+	switch {
+	case canonicalPresent:
+		// Canonical wins — drop any stray variants so the install isn't
+		// littered with duplicate prompt files.
+		if len(variants) > 0 {
+			zipData, err = utils.RemoveFilesFromZip(zipData, variants...)
+			if err != nil {
+				return nil, err
+			}
+		}
+	case len(variants) > 0:
+		// No canonical entry — pick a deterministic source, rename it, and
+		// drop the rest.
+		sort.Strings(variants)
+		source := variants[0]
+		if extras := variants[1:]; len(extras) > 0 {
+			zipData, err = utils.RemoveFilesFromZip(zipData, extras...)
+			if err != nil {
+				return nil, err
+			}
+		}
+		zipData, err = utils.RenameFileInZip(zipData, source, canonical)
 		if err != nil {
 			return nil, err
 		}
-	} else if !canonicalPresent {
+	default:
 		// Nothing to align — no prompt file (canonical or otherwise) in the zip.
 		return zipData, nil
 	}
@@ -88,7 +116,7 @@ func alignMetadataPromptFile(zipData []byte, assetType asset.Type, canonical str
 	}
 
 	current := currentPromptFile(meta, assetType)
-	if current == "" || current == canonical || !strings.EqualFold(current, canonical) {
+	if !strings.EqualFold(current, canonical) || current == canonical {
 		return zipData, nil
 	}
 

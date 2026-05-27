@@ -177,6 +177,143 @@ metadata-version = "1.0"
 	}
 }
 
+// TestNormalizePromptFileCase_CanonicalWinsOverVariants documents the
+// collision rule for the rare case (only reachable on case-sensitive
+// filesystems) where a zip contains both the canonical SKILL.md and one or
+// more lowercase variants. The canonical content must be preserved verbatim
+// — variants are dropped, not promoted.
+func TestNormalizePromptFileCase_CanonicalWinsOverVariants(t *testing.T) {
+	zipData := makeZip(t, map[string]string{
+		"SKILL.md": "canonical body",
+		"skill.md": "variant body",
+		"Skill.md": "another variant",
+	})
+
+	got, err := normalizePromptFileCase(zipData, asset.TypeSkill)
+	if err != nil {
+		t.Fatalf("normalizePromptFileCase: %v", err)
+	}
+
+	files, err := utils.ListZipFiles(got)
+	if err != nil {
+		t.Fatalf("ListZipFiles: %v", err)
+	}
+	names := map[string]bool{}
+	for _, f := range files {
+		names[f] = true
+	}
+	if !names["SKILL.md"] {
+		t.Errorf("expected SKILL.md retained, got %v", files)
+	}
+	for _, stray := range []string{"skill.md", "Skill.md"} {
+		if names[stray] {
+			t.Errorf("expected %q dropped, got %v", stray, files)
+		}
+	}
+
+	body, err := utils.ReadZipFile(got, "SKILL.md")
+	if err != nil {
+		t.Fatalf("ReadZipFile: %v", err)
+	}
+	if string(body) != "canonical body" {
+		t.Errorf("canonical content was overwritten: got %q", body)
+	}
+}
+
+// TestNormalizePromptFileCase_MultipleVariantsDeterministic confirms that
+// when no canonical entry is present but multiple variants are, the
+// lexicographically first variant is the one promoted to canonical and the
+// rest are dropped.
+func TestNormalizePromptFileCase_MultipleVariantsDeterministic(t *testing.T) {
+	zipData := makeZip(t, map[string]string{
+		"skill.md": "lowercase body",
+		"Skill.md": "title-case body",
+	})
+
+	got, err := normalizePromptFileCase(zipData, asset.TypeSkill)
+	if err != nil {
+		t.Fatalf("normalizePromptFileCase: %v", err)
+	}
+
+	files, err := utils.ListZipFiles(got)
+	if err != nil {
+		t.Fatalf("ListZipFiles: %v", err)
+	}
+	names := map[string]bool{}
+	for _, f := range files {
+		names[f] = true
+	}
+	if !names["SKILL.md"] {
+		t.Errorf("expected SKILL.md present, got %v", files)
+	}
+	if names["skill.md"] || names["Skill.md"] {
+		t.Errorf("expected variants dropped, got %v", files)
+	}
+
+	// "Skill.md" sorts before "skill.md" (uppercase < lowercase in ASCII), so
+	// it should be the winner.
+	body, err := utils.ReadZipFile(got, "SKILL.md")
+	if err != nil {
+		t.Fatalf("ReadZipFile: %v", err)
+	}
+	if string(body) != "title-case body" {
+		t.Errorf("expected lexicographically-first variant's content, got %q", body)
+	}
+}
+
+// TestNormalizePromptFileCase_MetadataOnlyRewrite covers the path where the
+// file on disk is already canonical but the user-supplied metadata.toml
+// declares the lowercase form. We still rewrite metadata so the lockfile
+// content matches the file shipped to clients.
+func TestNormalizePromptFileCase_MetadataOnlyRewrite(t *testing.T) {
+	userMeta := strings.TrimSpace(`
+metadata-version = "1.0"
+
+[asset]
+  name = "my-skill"
+  version = "1"
+  type = "skill"
+
+[skill]
+  prompt-file = "skill.md"
+`) + "\n"
+
+	zipData := makeZip(t, map[string]string{
+		"SKILL.md":      "body",
+		"metadata.toml": userMeta,
+	})
+
+	got, err := normalizePromptFileCase(zipData, asset.TypeSkill)
+	if err != nil {
+		t.Fatalf("normalizePromptFileCase: %v", err)
+	}
+
+	rewrittenBytes, err := utils.ReadZipFile(got, "metadata.toml")
+	if err != nil {
+		t.Fatalf("ReadZipFile metadata.toml: %v", err)
+	}
+	rewritten, err := metadata.Parse(rewrittenBytes)
+	if err != nil {
+		t.Fatalf("Parse rewritten metadata: %v", err)
+	}
+	if rewritten.Skill == nil || rewritten.Skill.PromptFile != "SKILL.md" {
+		t.Errorf("expected metadata.toml prompt-file rewritten to SKILL.md, got %+v", rewritten.Skill)
+	}
+
+	// File should still be canonical (no rename happened).
+	files, err := utils.ListZipFiles(got)
+	if err != nil {
+		t.Fatalf("ListZipFiles: %v", err)
+	}
+	names := map[string]bool{}
+	for _, f := range files {
+		names[f] = true
+	}
+	if !names["SKILL.md"] {
+		t.Errorf("expected SKILL.md preserved, got %v", files)
+	}
+}
+
 // TestNormalizePromptFileCase_LeavesCustomPromptFileAlone verifies that we
 // only touch metadata when the declared prompt-file case-insensitively matches
 // the canonical name. A user who deliberately picked an unrelated filename
