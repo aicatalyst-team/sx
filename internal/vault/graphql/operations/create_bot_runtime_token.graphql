@@ -1,0 +1,6 @@
+mutation CreateBotRuntimeToken($botId: ID!, $label: String, $ttlSeconds: Int) {
+  createBotRuntimeToken(botId: $botId, label: $label, ttlSeconds: $ttlSeconds) {
+    botKey
+    expiresAt
+  }
+}

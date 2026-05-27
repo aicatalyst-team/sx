@@ -323,6 +323,7 @@ type sleuthBotNode struct {
 func sleuthBotToMgmt(node sleuthBotNode) mgmt.Bot {
 	return mgmt.Bot{
 		Name:        node.Name,
+		Slug:        node.Slug,
 		Description: node.Description,
 		Teams:       node.Teams,
 	}
@@ -741,6 +742,45 @@ func (s *SleuthVault) CreateBotApiKey(ctx context.Context, botName, label string
 	// creation time. Callers that need to display the masked form should
 	// follow up with ListBotApiKeys.
 	return resp.CreateBotApiKey.BotKey, mgmt.BotApiKey{Label: label}, nil
+}
+
+func (s *SleuthVault) CreateBotRuntimeToken(ctx context.Context, botName, label string, ttlSeconds int) (string, time.Time, error) {
+	gid, err := s.botGIDByName(ctx, botName)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	label = strings.TrimSpace(label)
+	var labelPtr *string
+	if label != "" {
+		labelPtr = &label
+	}
+	var ttl *int
+	if ttlSeconds != 0 {
+		ttl = &ttlSeconds
+	}
+	resp, err := vaultgql.CreateBotRuntimeToken(ctx, s.gqlClient(), gid, labelPtr, ttl)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	if resp.CreateBotRuntimeToken == nil {
+		return "", time.Time{}, errors.New("missing createBotRuntimeToken payload in response")
+	}
+	return resp.CreateBotRuntimeToken.BotKey, resp.CreateBotRuntimeToken.ExpiresAt, nil
+}
+
+func (s *SleuthVault) RevokeBotRuntimeTokens(ctx context.Context, botName string) (int, error) {
+	gid, err := s.botGIDByName(ctx, botName)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := vaultgql.RevokeBotRuntimeTokens(ctx, s.gqlClient(), gid)
+	if err != nil {
+		return 0, err
+	}
+	if resp.RevokeBotRuntimeTokens == nil {
+		return 0, errors.New("missing revokeBotRuntimeTokens payload in response")
+	}
+	return resp.RevokeBotRuntimeTokens.RevokedCount, nil
 }
 
 func (s *SleuthVault) ListBotApiKeys(ctx context.Context, botName string) ([]mgmt.BotApiKey, error) {

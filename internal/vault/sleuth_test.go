@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sleuth-io/sx/internal/lockfile"
 	"github.com/sleuth-io/sx/internal/mgmt"
@@ -153,6 +154,132 @@ func TestSleuthVault_FindUser_QueryShape(t *testing.T) {
 	}
 	if len(*records) != 1 || (*records)[0].OperationName != "FindUser" {
 		t.Fatalf("expected single FindUser request, got: %+v", *records)
+	}
+}
+
+func TestSleuthVault_CreateBotRuntimeToken_QueryShape(t *testing.T) {
+	expiresAt := "2026-05-27T12:00:00Z"
+	srv, records := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"ListBots": func(vars map[string]any) any {
+			return map[string]any{
+				"bots": []any{
+					map[string]any{
+						"id":          "bot-1",
+						"name":        "Reviewer",
+						"slug":        "reviewer",
+						"description": "Reviews pull requests.",
+						"teams":       []any{},
+					},
+				},
+			}
+		},
+		"CreateBotRuntimeToken": func(vars map[string]any) any {
+			if got, _ := vars["botId"].(string); got != "bot-1" {
+				t.Errorf("botId = %q, want bot-1", got)
+			}
+			if got, _ := vars["label"].(string); got != "Hetchy runtime" {
+				t.Errorf("label = %q, want Hetchy runtime", got)
+			}
+			gotTTL, _ := vars["ttlSeconds"].(float64)
+			if int(gotTTL) != 600 {
+				t.Errorf("ttlSeconds = %v, want 600", gotTTL)
+			}
+			return map[string]any{
+				"createBotRuntimeToken": map[string]any{
+					"botKey":    "runtime-token",
+					"expiresAt": expiresAt,
+				},
+			}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	token, gotExpiresAt, err := v.CreateBotRuntimeToken(context.Background(), "Reviewer", " Hetchy runtime ", 600)
+	if err != nil {
+		t.Fatalf("CreateBotRuntimeToken failed: %v", err)
+	}
+	if token != "runtime-token" {
+		t.Fatalf("token = %q, want runtime-token", token)
+	}
+	wantExpiresAt, err := time.Parse(time.RFC3339, expiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gotExpiresAt.Equal(wantExpiresAt) {
+		t.Fatalf("expiresAt = %s, want %s", gotExpiresAt, wantExpiresAt)
+	}
+	if len(*records) != 2 || (*records)[0].OperationName != "ListBots" || (*records)[1].OperationName != "CreateBotRuntimeToken" {
+		t.Fatalf("unexpected GraphQL operations: %+v", *records)
+	}
+}
+
+func TestSleuthVault_RevokeBotRuntimeTokens_QueryShape(t *testing.T) {
+	srv, records := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"ListBots": func(vars map[string]any) any {
+			return map[string]any{
+				"bots": []any{
+					map[string]any{
+						"id":          "bot-1",
+						"name":        "Reviewer",
+						"slug":        "reviewer",
+						"description": "Reviews pull requests.",
+						"teams":       []any{},
+					},
+				},
+			}
+		},
+		"RevokeBotRuntimeTokens": func(vars map[string]any) any {
+			if got, _ := vars["botId"].(string); got != "bot-1" {
+				t.Errorf("botId = %q, want bot-1", got)
+			}
+			return map[string]any{
+				"revokeBotRuntimeTokens": map[string]any{
+					"revokedCount": 2,
+				},
+			}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	revoked, err := v.RevokeBotRuntimeTokens(context.Background(), "Reviewer")
+	if err != nil {
+		t.Fatalf("RevokeBotRuntimeTokens failed: %v", err)
+	}
+	if revoked != 2 {
+		t.Fatalf("revoked = %d, want 2", revoked)
+	}
+	if len(*records) != 2 || (*records)[0].OperationName != "ListBots" || (*records)[1].OperationName != "RevokeBotRuntimeTokens" {
+		t.Fatalf("unexpected GraphQL operations: %+v", *records)
+	}
+}
+
+func TestSleuthVault_ListBots_ProjectsSlug(t *testing.T) {
+	srv, _ := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"ListBots": func(vars map[string]any) any {
+			return map[string]any{
+				"bots": []any{
+					map[string]any{
+						"id":          "bot-1",
+						"name":        "Reviewer",
+						"slug":        "reviewer",
+						"description": "Reviews pull requests.",
+						"teams":       []any{},
+					},
+				},
+			}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	bots, err := v.ListBots(context.Background())
+	if err != nil {
+		t.Fatalf("ListBots failed: %v", err)
+	}
+	if len(bots) != 1 {
+		t.Fatalf("ListBots returned %d bots, want 1", len(bots))
+	}
+	if bots[0].Slug != "reviewer" {
+		t.Fatalf("bots[0].Slug = %q, want reviewer", bots[0].Slug)
 	}
 }
 

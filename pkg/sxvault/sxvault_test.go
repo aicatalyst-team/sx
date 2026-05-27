@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,6 +66,33 @@ func TestEnsureBotExistingAndDescriptionUpdate(t *testing.T) {
 		if !strings.Contains(manifest, want) {
 			t.Fatalf("sx.toml missing %q:\n%s", want, manifest)
 		}
+	}
+}
+
+func TestListBotsAndRuntimeTokens(t *testing.T) {
+	ctx := context.Background()
+	_, client := newGitVaultClient(t)
+
+	if _, err := client.EnsureBot(ctx, Bot{Name: "ci", Description: "CI bot."}); err != nil {
+		t.Fatal(err)
+	}
+	bots, err := client.ListBots(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bots) != 1 || bots[0].Name != "ci" || bots[0].Description != "CI bot." {
+		t.Fatalf("ListBots returned %+v, want CI bot", bots)
+	}
+	if bots[0].Slug != "" {
+		t.Fatalf("git vault bots[0].Slug = %q, want empty (manifest bots have no slug)", bots[0].Slug)
+	}
+	_, err = client.CreateBotRuntimeToken(ctx, BotRuntimeTokenSpec{BotName: "ci", Label: "test"})
+	if !errors.Is(err, ErrBotRuntimeTokensUnsupported) {
+		t.Fatalf("CreateBotRuntimeToken on git vault err = %v, want ErrBotRuntimeTokensUnsupported", err)
+	}
+	_, err = client.RevokeBotRuntimeTokens(ctx, "ci")
+	if !errors.Is(err, ErrBotRuntimeTokensUnsupported) {
+		t.Fatalf("RevokeBotRuntimeTokens on git vault err = %v, want ErrBotRuntimeTokensUnsupported", err)
 	}
 }
 
