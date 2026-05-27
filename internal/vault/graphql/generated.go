@@ -633,6 +633,32 @@ type CreateBotResponse struct {
 // GetCreateBot returns CreateBotResponse.CreateBot, and is useful for accessing the field via an interface.
 func (v *CreateBotResponse) GetCreateBot() *CreateBotCreateBotCreateBotMutation { return v.CreateBot }
 
+// CreateBotRuntimeTokenCreateBotRuntimeTokenCreateBotRuntimeTokenMutation includes the requested fields of the GraphQL type CreateBotRuntimeTokenMutation.
+type CreateBotRuntimeTokenCreateBotRuntimeTokenCreateBotRuntimeTokenMutation struct {
+	BotKey    string    `json:"botKey"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+// GetBotKey returns CreateBotRuntimeTokenCreateBotRuntimeTokenCreateBotRuntimeTokenMutation.BotKey, and is useful for accessing the field via an interface.
+func (v *CreateBotRuntimeTokenCreateBotRuntimeTokenCreateBotRuntimeTokenMutation) GetBotKey() string {
+	return v.BotKey
+}
+
+// GetExpiresAt returns CreateBotRuntimeTokenCreateBotRuntimeTokenCreateBotRuntimeTokenMutation.ExpiresAt, and is useful for accessing the field via an interface.
+func (v *CreateBotRuntimeTokenCreateBotRuntimeTokenCreateBotRuntimeTokenMutation) GetExpiresAt() time.Time {
+	return v.ExpiresAt
+}
+
+// CreateBotRuntimeTokenResponse is returned by CreateBotRuntimeToken on success.
+type CreateBotRuntimeTokenResponse struct {
+	CreateBotRuntimeToken *CreateBotRuntimeTokenCreateBotRuntimeTokenCreateBotRuntimeTokenMutation `json:"createBotRuntimeToken"`
+}
+
+// GetCreateBotRuntimeToken returns CreateBotRuntimeTokenResponse.CreateBotRuntimeToken, and is useful for accessing the field via an interface.
+func (v *CreateBotRuntimeTokenResponse) GetCreateBotRuntimeToken() *CreateBotRuntimeTokenCreateBotRuntimeTokenCreateBotRuntimeTokenMutation {
+	return v.CreateBotRuntimeToken
+}
+
 // CreateTeamCreateTeamCreateTeamMutation includes the requested fields of the GraphQL type CreateTeamMutation.
 type CreateTeamCreateTeamCreateTeamMutation struct {
 	Team   *CreateTeamCreateTeamCreateTeamMutationTeam             `json:"team"`
@@ -3229,6 +3255,22 @@ type __CreateBotInput struct {
 // GetInput returns __CreateBotInput.Input, and is useful for accessing the field via an interface.
 func (v *__CreateBotInput) GetInput() CreateBotInput { return v.Input }
 
+// __CreateBotRuntimeTokenInput is used internally by genqlient
+type __CreateBotRuntimeTokenInput struct {
+	BotId      string  `json:"botId"`
+	Label      *string `json:"label"`
+	TtlSeconds *int    `json:"ttlSeconds"`
+}
+
+// GetBotId returns __CreateBotRuntimeTokenInput.BotId, and is useful for accessing the field via an interface.
+func (v *__CreateBotRuntimeTokenInput) GetBotId() string { return v.BotId }
+
+// GetLabel returns __CreateBotRuntimeTokenInput.Label, and is useful for accessing the field via an interface.
+func (v *__CreateBotRuntimeTokenInput) GetLabel() *string { return v.Label }
+
+// GetTtlSeconds returns __CreateBotRuntimeTokenInput.TtlSeconds, and is useful for accessing the field via an interface.
+func (v *__CreateBotRuntimeTokenInput) GetTtlSeconds() *int { return v.TtlSeconds }
+
 // __CreateTeamInput is used internally by genqlient
 type __CreateTeamInput struct {
 	Input CreateTeamInput `json:"input"`
@@ -3611,6 +3653,45 @@ func CreateBotApiKey(
 	}
 
 	data_ = &CreateBotApiKeyResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The mutation executed by CreateBotRuntimeToken.
+const CreateBotRuntimeToken_Operation = `
+mutation CreateBotRuntimeToken ($botId: ID!, $label: String, $ttlSeconds: Int) {
+	createBotRuntimeToken(botId: $botId, label: $label, ttlSeconds: $ttlSeconds) {
+		botKey
+		expiresAt
+	}
+}
+`
+
+func CreateBotRuntimeToken(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	botId string,
+	label *string,
+	ttlSeconds *int,
+) (data_ *CreateBotRuntimeTokenResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "CreateBotRuntimeToken",
+		Query:  CreateBotRuntimeToken_Operation,
+		Variables: &__CreateBotRuntimeTokenInput{
+			BotId:      botId,
+			Label:      label,
+			TtlSeconds: ttlSeconds,
+		},
+	}
+
+	data_ = &CreateBotRuntimeTokenResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(

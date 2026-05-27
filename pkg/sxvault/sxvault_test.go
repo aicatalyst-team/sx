@@ -68,6 +68,26 @@ func TestEnsureBotExistingAndDescriptionUpdate(t *testing.T) {
 	}
 }
 
+func TestListBotsAndRuntimeTokens(t *testing.T) {
+	ctx := context.Background()
+	_, client := newGitVaultClient(t)
+
+	if _, err := client.EnsureBot(ctx, Bot{Name: "ci", Description: "CI bot."}); err != nil {
+		t.Fatal(err)
+	}
+	bots, err := client.ListBots(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bots) != 1 || bots[0].Name != "ci" || bots[0].Description != "CI bot." {
+		t.Fatalf("ListBots returned %+v, want CI bot", bots)
+	}
+	if _, err := client.CreateBotRuntimeToken(ctx, BotRuntimeTokenSpec{BotName: "ci", Label: "test"}); err == nil ||
+		!strings.Contains(err.Error(), "only supported by skills.new") {
+		t.Fatalf("CreateBotRuntimeToken on git vault err = %v, want unsupported error", err)
+	}
+}
+
 func TestPutAgentSameVersionIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	remote, client := newGitVaultClient(t)

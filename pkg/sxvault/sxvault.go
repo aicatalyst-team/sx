@@ -155,6 +155,29 @@ type AgentResult struct {
 	BotKey string
 }
 
+type BotSummary struct {
+	Name        string
+	Slug        string
+	Description string
+	Teams       []string
+}
+
+type BotRuntimeTokenSpec struct {
+	BotName string
+	// Label is stored with the short-lived runtime token for audit/display.
+	// Empty is allowed and lets the backend apply its default label.
+	Label string
+	// TTLSeconds controls how long the runtime token is valid. Zero means
+	// use the backend default. The Skills.new backend currently accepts
+	// values from 60 seconds to 24 hours.
+	TTLSeconds int
+}
+
+type BotRuntimeTokenResult struct {
+	Token     string
+	ExpiresAt time.Time
+}
+
 type SkillZipSpec struct {
 	Name    string
 	Version string
@@ -482,6 +505,50 @@ func (c *Client) PutSkillZip(ctx context.Context, spec SkillZipSpec) error {
 		return nil
 	}
 	return c.InstallAssetToBot(ctx, spec.Name, spec.BotName)
+}
+
+func (c *Client) ListBots(ctx context.Context) ([]BotSummary, error) {
+	if c == nil || c.v == nil {
+		return nil, errors.New("sxvault: nil client")
+	}
+	bots, err := c.v.ListBots(c.actorContext(ctx))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]BotSummary, 0, len(bots))
+	for _, b := range bots {
+		out = append(out, BotSummary{
+			Name:        b.Name,
+			Slug:        b.Slug,
+			Description: b.Description,
+			Teams:       append([]string(nil), b.Teams...),
+		})
+	}
+	return out, nil
+}
+
+func (c *Client) CreateBotRuntimeToken(ctx context.Context, spec BotRuntimeTokenSpec) (BotRuntimeTokenResult, error) {
+	if c == nil || c.v == nil {
+		return BotRuntimeTokenResult{}, errors.New("sxvault: nil client")
+	}
+	botName := strings.TrimSpace(spec.BotName)
+	if botName == "" {
+		return BotRuntimeTokenResult{}, errors.New("sxvault: bot name required")
+	}
+	manager, ok := c.v.(vault.BotRuntimeTokenManager)
+	if !ok {
+		return BotRuntimeTokenResult{}, errors.New("sxvault: bot runtime tokens are only supported by skills.new vaults")
+	}
+	token, expiresAt, err := manager.CreateBotRuntimeToken(
+		c.actorContext(ctx),
+		botName,
+		strings.TrimSpace(spec.Label),
+		spec.TTLSeconds,
+	)
+	if err != nil {
+		return BotRuntimeTokenResult{}, err
+	}
+	return BotRuntimeTokenResult{Token: token, ExpiresAt: expiresAt}, nil
 }
 
 func (c *Client) InstallAssetToBot(ctx context.Context, assetName, botName string) error {

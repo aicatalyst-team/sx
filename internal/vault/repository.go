@@ -241,6 +241,13 @@ type BotApiKeyManager interface {
 	DeleteBotApiKey(ctx context.Context, botName, keyID string) error
 }
 
+// BotRuntimeTokenManager is implemented by vaults that can issue short-lived,
+// read-only tokens for bot identities. File-based vaults do not implement this
+// because access is granted by the vault checkout itself, not by API tokens.
+type BotRuntimeTokenManager interface {
+	CreateBotRuntimeToken(ctx context.Context, botName, label string, ttlSeconds int) (rawToken string, expiresAt time.Time, err error)
+}
+
 // ScopeOption represents a vault-specific scope option (e.g., "personal", "team")
 // displayed in the interactive UI alongside the built-in global/repo options.
 type ScopeOption struct {

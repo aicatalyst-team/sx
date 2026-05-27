@@ -36,6 +36,7 @@ var ErrEmptyBotName = errors.New("bot name cannot be empty")
 // capability is exposed only on the BotApiKeyManager interface.
 type Bot struct {
 	Name        string
+	Slug        string
 	Description string
 	Teams       []string
 }
