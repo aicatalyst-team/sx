@@ -555,7 +555,7 @@ func (s *SleuthVault) resolveTeamGIDs(ctx context.Context, names []string) ([]st
 	for _, name := range names {
 		gid, ok := idsByName[name]
 		if !ok {
-			return nil, mgmt.ErrTeamNotFound
+			return nil, fmt.Errorf("%w: %s", mgmt.ErrTeamNotFound, name)
 		}
 		out = append(out, gid)
 	}

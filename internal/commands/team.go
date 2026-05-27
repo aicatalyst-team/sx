@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -73,7 +74,10 @@ func newTeamShowCommand() *cobra.Command {
 			}
 			team, err := v.GetTeam(ctx, args[0])
 			if err != nil {
-				return fmt.Errorf("team %q not found", args[0])
+				if errors.Is(err, mgmt.ErrTeamNotFound) {
+					return fmt.Errorf("team %q not found", args[0])
+				}
+				return err
 			}
 			return printTeamDetails(cmd, team)
 		},
@@ -346,7 +350,10 @@ func requireTeamAdmin(ctx context.Context, v vault.Vault, teamName string) error
 	}
 	team, err := v.GetTeam(ctx, teamName)
 	if err != nil {
-		return fmt.Errorf("team %q not found", teamName)
+		if errors.Is(err, mgmt.ErrTeamNotFound) {
+			return fmt.Errorf("team %q not found", teamName)
+		}
+		return err
 	}
 	if !team.IsAdmin(actor.Email) {
 		return fmt.Errorf("you (%s) are not an admin of team %s — only admins can modify a team", actor.Email, teamName)
