@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -65,6 +66,7 @@ func GetSSHKeyPath() string {
 // Client provides high-level git operations with SSH key support
 type Client struct {
 	sshKeyPath string
+	extraEnv   []string
 }
 
 // NewClient creates a new git client using the global SSH key path
@@ -74,6 +76,80 @@ func NewClient() *Client {
 	}
 }
 
+type ClientOption func(*Client)
+
+func NewClientWithOptions(opts ...ClientOption) *Client {
+	c := NewClient()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(c)
+		}
+	}
+	return c
+}
+
+func WithEnv(env ...string) ClientOption {
+	return func(c *Client) {
+		c.extraEnv = append(c.extraEnv, env...)
+	}
+}
+
+// WithSSHKey overrides the SSH key path that would otherwise be inherited
+// from the process-global value set by SetSSHKeyPath. Library consumers that
+// don't go through the CLI flag/env wiring should use this to scope an SSH
+// key to a single git.Client.
+func WithSSHKey(path string) ClientOption {
+	return func(c *Client) {
+		c.sshKeyPath = path
+	}
+}
+
+func WithCommitActor(name, email string) ClientOption {
+	env := []string{}
+	if name != "" {
+		env = append(env, "GIT_AUTHOR_NAME="+name, "GIT_COMMITTER_NAME="+name)
+	}
+	if email != "" {
+		env = append(env, "GIT_AUTHOR_EMAIL="+email, "GIT_COMMITTER_EMAIL="+email)
+	}
+	return WithEnv(env...)
+}
+
+func WithHTTPSBasicAuth(host, username, password string) ClientOption {
+	return WithHTTPBasicAuth("https", host, username, password)
+}
+
+func WithHTTPBasicAuth(scheme, host, username, password string) ClientOption {
+	scheme = strings.TrimSpace(strings.ToLower(scheme))
+	if scheme == "" {
+		scheme = "https"
+	}
+	if host == "" || username == "" || password == "" {
+		return nil
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+	return WithEnv(
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=http."+scheme+"://"+host+"/.extraheader",
+		"GIT_CONFIG_VALUE_0=AUTHORIZATION: basic "+encoded,
+	)
+}
+
+func (c *Client) ExtraEnv() []string {
+	if c == nil {
+		return nil
+	}
+	return append([]string(nil), c.extraEnv...)
+}
+
+func (c *Client) command(ctx context.Context, args ...string) *exec.Cmd {
+	return execGitCommandWithEnv(ctx, c.sshKeyPath, c.extraEnv, args...)
+}
+
+func (c *Client) commandWithURL(ctx context.Context, repoURL string, args ...string) (*exec.Cmd, string, error) {
+	return execGitCommandWithURLAndEnv(ctx, c.sshKeyPath, c.extraEnv, repoURL, args...)
+}
+
 // Clone clones a git repository to the specified destination path
 func (c *Client) Clone(ctx context.Context, repoURL, destPath string) error {
 	// Ensure parent directory exists
@@ -81,7 +157,7 @@ func (c *Client) Clone(ctx context.Context, repoURL, destPath string) error {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
-	cmd, _, err := execGitCommandWithURL(ctx, c.sshKeyPath, repoURL, "clone", "--quiet")
+	cmd, _, err := c.commandWithURL(ctx, repoURL, "clone", "--quiet")
 	if err != nil {
 		return err
 	}
@@ -99,12 +175,12 @@ func (c *Client) Clone(ctx context.Context, repoURL, destPath string) error {
 
 // Fetch fetches all remotes in the repository
 func (c *Client) Fetch(ctx context.Context, repoPath string) error {
-	cmd := execGitCommand(ctx, c.sshKeyPath, "fetch", "--quiet", "--all")
+	cmd := c.command(ctx, "fetch", "--quiet", "--all")
 	cmd.Dir = repoPath
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return classifyRemoteError(remoteLocation(ctx, c.sshKeyPath, repoPath), string(output), err)
+		return classifyRemoteError(c.remoteLocation(ctx, repoPath), string(output), err)
 	}
 
 	return nil
@@ -121,14 +197,14 @@ func (c *Client) Pull(ctx context.Context, repoPath string) error {
 	// explicit pull.rebase / pull.ff setting. The merge path is also
 	// what lets gitattributes merge=union drivers run on conflicting
 	// append-only files like .sx/usage/*.jsonl.
-	cmd := execGitCommand(ctx, c.sshKeyPath, "pull", "--no-rebase", "--no-edit", "--quiet")
+	cmd := c.command(ctx, "pull", "--no-rebase", "--no-edit", "--quiet")
 	cmd.Dir = repoPath
 
 	output, err := cmd.CombinedOutput()
 	log.Debug("git pull completed", "duration", time.Since(start), "error", err)
 
 	if err != nil {
-		return classifyRemoteError(remoteLocation(ctx, c.sshKeyPath, repoPath), string(output), err)
+		return classifyRemoteError(c.remoteLocation(ctx, repoPath), string(output), err)
 	}
 
 	return nil
@@ -142,14 +218,14 @@ func (c *Client) PullRebase(ctx context.Context, repoPath string) error {
 	start := time.Now()
 	log.Debug("git pull --rebase starting", "repoPath", repoPath)
 
-	cmd := execGitCommand(ctx, c.sshKeyPath, "pull", "--rebase", "--quiet")
+	cmd := c.command(ctx, "pull", "--rebase", "--quiet")
 	cmd.Dir = repoPath
 
 	output, err := cmd.CombinedOutput()
 	log.Debug("git pull --rebase completed", "duration", time.Since(start), "error", err)
 
 	if err != nil {
-		return classifyRemoteError(remoteLocation(ctx, c.sshKeyPath, repoPath), string(output), err)
+		return classifyRemoteError(c.remoteLocation(ctx, repoPath), string(output), err)
 	}
 
 	return nil
@@ -157,12 +233,12 @@ func (c *Client) PullRebase(ctx context.Context, repoPath string) error {
 
 // Push pushes changes to the remote repository
 func (c *Client) Push(ctx context.Context, repoPath string) error {
-	cmd := execGitCommand(ctx, c.sshKeyPath, "push", "--quiet")
+	cmd := c.command(ctx, "push", "--quiet")
 	cmd.Dir = repoPath
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return classifyRemoteError(remoteLocation(ctx, c.sshKeyPath, repoPath), string(output), err)
+		return classifyRemoteError(c.remoteLocation(ctx, repoPath), string(output), err)
 	}
 
 	return nil
@@ -170,12 +246,12 @@ func (c *Client) Push(ctx context.Context, repoPath string) error {
 
 // PushSetUpstream pushes and sets the upstream tracking branch (for first push to empty repos)
 func (c *Client) PushSetUpstream(ctx context.Context, repoPath, branch string) error {
-	cmd := execGitCommand(ctx, c.sshKeyPath, "push", "--quiet", "-u", "origin", branch)
+	cmd := c.command(ctx, "push", "--quiet", "-u", "origin", branch)
 	cmd.Dir = repoPath
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return classifyRemoteError(remoteLocation(ctx, c.sshKeyPath, repoPath), string(output), err)
+		return classifyRemoteError(c.remoteLocation(ctx, repoPath), string(output), err)
 	}
 
 	return nil
@@ -183,7 +259,7 @@ func (c *Client) PushSetUpstream(ctx context.Context, repoPath, branch string) e
 
 // Checkout checks out a specific ref (branch, tag, or commit)
 func (c *Client) Checkout(ctx context.Context, repoPath, ref string) error {
-	cmd := execGitCommand(ctx, c.sshKeyPath, "checkout", "--quiet", ref)
+	cmd := c.command(ctx, "checkout", "--quiet", ref)
 	cmd.Dir = repoPath
 
 	output, err := cmd.CombinedOutput()
@@ -202,7 +278,7 @@ func (c *Client) LsRemote(ctx context.Context, repoURL, ref string) (string, err
 		return ref, nil
 	}
 
-	cmd, _, err := execGitCommandWithURL(ctx, c.sshKeyPath, repoURL, "ls-remote")
+	cmd, _, err := c.commandWithURL(ctx, repoURL, "ls-remote")
 	if err != nil {
 		return "", err
 	}
@@ -236,7 +312,7 @@ func (c *Client) LsRemote(ctx context.Context, repoURL, ref string) (string, err
 
 // RevParse resolves a ref to a commit hash in a local repository
 func (c *Client) RevParse(ctx context.Context, repoPath, ref string) (string, error) {
-	cmd := execGitCommand(ctx, c.sshKeyPath, "rev-parse", ref)
+	cmd := c.command(ctx, "rev-parse", ref)
 	cmd.Dir = repoPath
 
 	output, err := cmd.Output()
@@ -249,7 +325,7 @@ func (c *Client) RevParse(ctx context.Context, repoPath, ref string) (string, er
 
 // GetRemoteURL returns the remote URL for the repository (typically 'origin')
 func (c *Client) GetRemoteURL(ctx context.Context, repoPath string) (string, error) {
-	cmd := execGitCommand(ctx, c.sshKeyPath, "remote", "get-url", "origin")
+	cmd := c.command(ctx, "remote", "get-url", "origin")
 	cmd.Dir = repoPath
 
 	output, err := cmd.CombinedOutput()
@@ -263,7 +339,7 @@ func (c *Client) GetRemoteURL(ctx context.Context, repoPath string) (string, err
 
 // GetCurrentBranch returns the current branch name
 func (c *Client) GetCurrentBranch(ctx context.Context, repoPath string) (string, error) {
-	cmd := execGitCommand(ctx, c.sshKeyPath, "rev-parse", "--abbrev-ref", "HEAD")
+	cmd := c.command(ctx, "rev-parse", "--abbrev-ref", "HEAD")
 	cmd.Dir = repoPath
 
 	output, err := cmd.CombinedOutput()
@@ -278,7 +354,7 @@ func (c *Client) GetCurrentBranch(ctx context.Context, repoPath string) (string,
 // GetCurrentBranchSymbolic returns the current branch name using symbolic-ref,
 // which works even on empty repos (no commits yet).
 func (c *Client) GetCurrentBranchSymbolic(ctx context.Context, repoPath string) (string, error) {
-	cmd := execGitCommand(ctx, c.sshKeyPath, "symbolic-ref", "--short", "HEAD")
+	cmd := c.command(ctx, "symbolic-ref", "--short", "HEAD")
 	cmd.Dir = repoPath
 
 	output, err := cmd.CombinedOutput()
@@ -291,7 +367,7 @@ func (c *Client) GetCurrentBranchSymbolic(ctx context.Context, repoPath string) 
 
 // CheckoutNewBranch creates and switches to a new branch
 func (c *Client) CheckoutNewBranch(ctx context.Context, repoPath, branch string) error {
-	cmd := execGitCommand(ctx, c.sshKeyPath, "checkout", "-b", branch)
+	cmd := c.command(ctx, "checkout", "-b", branch)
 	cmd.Dir = repoPath
 
 	output, err := cmd.CombinedOutput()
@@ -305,7 +381,7 @@ func (c *Client) CheckoutNewBranch(ctx context.Context, repoPath, branch string)
 // Add stages files for commit
 func (c *Client) Add(ctx context.Context, repoPath string, paths ...string) error {
 	args := append([]string{"add"}, paths...)
-	cmd := execGitCommand(ctx, c.sshKeyPath, args...)
+	cmd := c.command(ctx, args...)
 	cmd.Dir = repoPath
 
 	output, err := cmd.CombinedOutput()
@@ -318,7 +394,7 @@ func (c *Client) Add(ctx context.Context, repoPath string, paths ...string) erro
 
 // Commit creates a commit with the given message
 func (c *Client) Commit(ctx context.Context, repoPath, message string) error {
-	cmd := execGitCommand(ctx, c.sshKeyPath, "commit", "-m", message)
+	cmd := c.command(ctx, "commit", "-m", message)
 	cmd.Dir = repoPath
 
 	output, err := cmd.CombinedOutput()
@@ -331,7 +407,7 @@ func (c *Client) Commit(ctx context.Context, repoPath, message string) error {
 
 // IsEmpty checks if a repository has no commits (e.g., freshly cloned empty repo)
 func (c *Client) IsEmpty(ctx context.Context, repoPath string) (bool, error) {
-	cmd := execGitCommand(ctx, c.sshKeyPath, "rev-parse", "HEAD")
+	cmd := c.command(ctx, "rev-parse", "HEAD")
 	cmd.Dir = repoPath
 
 	err := cmd.Run()
@@ -348,7 +424,7 @@ func (c *Client) IsEmpty(ctx context.Context, repoPath string) (bool, error) {
 
 // HasStagedChanges checks if there are staged changes ready to be committed
 func (c *Client) HasStagedChanges(ctx context.Context, repoPath string) (bool, error) {
-	cmd := execGitCommand(ctx, c.sshKeyPath, "diff", "--cached", "--quiet")
+	cmd := c.command(ctx, "diff", "--cached", "--quiet")
 	cmd.Dir = repoPath
 
 	err := cmd.Run()
@@ -371,8 +447,8 @@ func (c *Client) HasStagedChanges(ctx context.Context, repoPath string) (bool, e
 // error messages: prefer the origin URL (what the user typed/cloned from),
 // fall back to the local path. Used by Fetch/Pull/Push so classified errors
 // mention something the user recognizes, not a cache-dir hash.
-func remoteLocation(ctx context.Context, sshKeyPath, repoPath string) string {
-	cmd := execGitCommand(ctx, sshKeyPath, "config", "--get", "remote.origin.url")
+func (c *Client) remoteLocation(ctx context.Context, repoPath string) string {
+	cmd := c.command(ctx, "config", "--get", "remote.origin.url")
 	cmd.Dir = repoPath
 	out, err := cmd.Output()
 	if err == nil {

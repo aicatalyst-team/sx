@@ -7,9 +7,10 @@ import (
 	"os/exec"
 )
 
-// execGitCommand creates a git command with optional SSH key configuration
+// execGitCommandWithEnv creates a git command with optional SSH key
+// configuration and extra environment values.
 // Returns the command ready to be executed (caller must call .Run(), .Output(), or .CombinedOutput())
-func execGitCommand(ctx context.Context, sshKeyPath string, args ...string) *exec.Cmd {
+func execGitCommandWithEnv(ctx context.Context, sshKeyPath string, extraEnv []string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", args...)
 
 	// Start from the parent environment and disable interactive prompts so
@@ -20,6 +21,7 @@ func execGitCommand(ctx context.Context, sshKeyPath string, args ...string) *exe
 	// vary between git versions, and the terminal-prompt path is already
 	// closed.
 	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	env = append(env, extraEnv...)
 
 	if sshKeyPath != "" {
 		// Validate SSH key (log warning but continue - will fail at exec time if invalid)
@@ -36,10 +38,11 @@ func execGitCommand(ctx context.Context, sshKeyPath string, args ...string) *exe
 	return cmd
 }
 
-// execGitCommandWithURL prepares a git command with URL conversion if needed
-// If sshKeyPath is provided and URL is HTTPS, converts URL to SSH
-// Returns the command, the final URL used, and any error
-func execGitCommandWithURL(ctx context.Context, sshKeyPath, url string, args ...string) (*exec.Cmd, string, error) {
+// execGitCommandWithURLAndEnv prepares a git command with URL conversion if
+// needed and extra environment values.
+// If sshKeyPath is provided and URL is HTTPS, converts URL to SSH.
+// Returns the command, the final URL used, and any error.
+func execGitCommandWithURLAndEnv(ctx context.Context, sshKeyPath string, extraEnv []string, url string, args ...string) (*exec.Cmd, string, error) {
 	finalURL := url
 
 	// Convert HTTPS to SSH if SSH key is provided
@@ -53,7 +56,7 @@ func execGitCommandWithURL(ctx context.Context, sshKeyPath, url string, args ...
 
 	// Create command with the final URL appended to args
 	fullArgs := append(args, finalURL)
-	cmd := execGitCommand(ctx, sshKeyPath, fullArgs...)
+	cmd := execGitCommandWithEnv(ctx, sshKeyPath, extraEnv, fullArgs...)
 
 	return cmd, finalURL, nil
 }

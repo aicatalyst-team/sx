@@ -62,24 +62,46 @@ type GitVault struct {
 	hasSynced bool
 }
 
+type GitVaultOption func(*gitVaultOptions)
+
+type gitVaultOptions struct {
+	gitClient *git.Client
+}
+
+func WithGitClient(client *git.Client) GitVaultOption {
+	return func(opts *gitVaultOptions) {
+		opts.gitClient = client
+	}
+}
+
 // NewGitVault creates a new Git repository
 func NewGitVault(repoURL string) (*GitVault, error) {
+	return NewGitVaultWithOptions(repoURL)
+}
+
+func NewGitVaultWithOptions(repoURL string, opts ...GitVaultOption) (*GitVault, error) {
+	options := gitVaultOptions{
+		gitClient: git.NewClient(),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+
 	// Get cache path for this repository
 	repoPath, err := cache.GetGitRepoCachePath(repoURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get cache path: %w", err)
 	}
 
-	// Create git client
-	gitClient := git.NewClient()
-
 	return &GitVault{
 		repoURL:     repoURL,
 		repoPath:    repoPath,
-		gitClient:   gitClient,
+		gitClient:   options.gitClient,
 		httpHandler: NewHTTPSourceHandler(""),       // No auth token for git repos
 		pathHandler: NewPathSourceHandler(repoPath), // Use repo path for relative paths
-		gitHandler:  NewGitSourceHandler(gitClient),
+		gitHandler:  NewGitSourceHandler(options.gitClient),
 	}, nil
 }
 
@@ -266,10 +288,19 @@ func (g *GitVault) GetAssetByVersion(ctx context.Context, name, version string) 
 	return zipData, nil
 }
 
-// GetMetadata retrieves metadata for a specific asset version
-// Not applicable for Git repositories (metadata is inside the zip)
+// GetMetadata retrieves metadata for a specific asset version. Git vaults
+// store assets exploded under assets/<name>/<version>/, so the metadata.toml
+// is just a file read away after syncing the repo.
 func (g *GitVault) GetMetadata(ctx context.Context, name, version string) (*metadata.Metadata, error) {
-	return nil, errors.New("GetMetadata not supported for Git repositories")
+	if err := g.cloneOrUpdate(ctx); err != nil {
+		return nil, fmt.Errorf("failed to clone/update repository: %w", err)
+	}
+	metadataPath := filepath.Join(g.repoPath, "assets", name, version, "metadata.toml")
+	data, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read metadata: %w", err)
+	}
+	return metadata.Parse(data)
 }
 
 // VerifyIntegrity checks hashes and sizes for downloaded assets
@@ -1045,6 +1076,10 @@ func (g *GitVault) ListAssets(ctx context.Context, opts ListAssetsOptions) (*Lis
 		}
 
 		assets = append(assets, assetSummary)
+	}
+
+	if search := strings.TrimSpace(opts.Search); search != "" {
+		assets = filterBySearch(assets, search)
 	}
 
 	// Apply limit if specified
