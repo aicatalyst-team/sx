@@ -39,7 +39,7 @@ type Team {
     before: String
     after: String
   ): UserConnection!
-  adminMemberIds: [ID!]
+  adminMembers: [SimpleUserType!]
   integrationDescription: String
   hasSubteams: Boolean!
   skillsRepositories: [SkillsRepositoryType!]
@@ -2709,6 +2709,13 @@ enum NotificationProviderType {
 
   """Slack"""
   SLACK
+}
+
+type SimpleUserType {
+  id: ID!
+  email: String!
+  display: String!
+  gravatar: String!
 }
 
 """
