@@ -74,10 +74,19 @@ type Client struct {
 
 type Bot struct {
 	Name string
-	// Description is the bot's human-readable identity. EnsureBot writes it
-	// on bot create and updates it when it differs from the stored value.
-	// Pass an empty string to leave an existing bot's description unchanged
-	// (useful when you want to ensure-bot without re-stamping identity).
+	// Description is the bot's human-readable identity.
+	//
+	// On UPDATE (bot already exists): EnsureBot rewrites the stored
+	// description only when Description is non-empty and differs from the
+	// current value. An empty Description preserves whatever is stored
+	// — useful for re-running EnsureBot from an agent-publish flow
+	// without re-stamping identity.
+	//
+	// On CREATE (bot doesn't exist yet): EnsureBot writes Description
+	// verbatim, so an empty Description produces a bot with no
+	// description at all. Pre-seed identity with an explicit
+	// EnsureBot(Bot{Name: ..., Description: "..."}) once before relying
+	// on the "empty preserves" path.
 	Description string
 }
 
@@ -98,12 +107,19 @@ type AgentSpec struct {
 	BotDescription string
 	Prompt         string
 	// Skills lists existing vault skills to also install on BotName
-	// alongside the agent. Each entry must refer to a skill already
-	// present in the vault — PutAgent verifies this and fails fast if any
-	// name is missing. Empty entries are dropped and duplicates are
+	// alongside the agent. Each entry must refer to a skill (asset type
+	// "skill") already present in the vault — PutAgent verifies this and
+	// fails fast on missing names or on a name that resolves to a
+	// different asset type. Empty entries are dropped and duplicates are
 	// collapsed. Skills are installed on the bot but are NOT persisted
 	// into the agent asset's metadata.toml; re-publishing the agent into
 	// another vault requires re-supplying Skills.
+	//
+	// Semantics on re-publish are additive only. Re-publishing the same
+	// agent with a shorter Skills list leaves the previously-installed
+	// skills attached to BotName — PutAgent never uninstalls. To remove
+	// a skill from a bot, call the uninstall path explicitly (out of
+	// scope for this facade today).
 	//
 	// Cost note for git vaults: each skill install is a separate manifest
 	// commit + push, so an agent with N skills produces roughly N+2
@@ -275,6 +291,16 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 		if len(versions) == 0 {
 			return AgentResult{}, fmt.Errorf("sxvault: skill %q not found in vault", skill)
 		}
+		// Asserting type=skill on the latest version blocks installing an
+		// agent (or any non-skill asset) under the Skills banner, which
+		// would otherwise silently leave the bot with two agents installed.
+		meta, mErr := c.v.GetMetadata(ctx, skill, versions[len(versions)-1])
+		if mErr != nil {
+			return AgentResult{}, fmt.Errorf("sxvault: reading metadata for %q: %w", skill, mErr)
+		}
+		if meta.Asset.Type.Key != asset.TypeSkill.Key {
+			return AgentResult{}, fmt.Errorf("sxvault: %q is type %q, not skill", skill, meta.Asset.Type.Key)
+		}
 	}
 	botKey, err := c.EnsureBot(ctx, Bot{Name: spec.BotName, Description: spec.BotDescription})
 	if err != nil {
@@ -324,6 +350,18 @@ func (c *Client) PutSkillZip(ctx context.Context, spec SkillZipSpec) error {
 		return err
 	}
 	ctx = c.actorContext(ctx)
+	// Validate the target bot exists before any side effects, mirroring
+	// PutAgent's skill pre-check — otherwise we publish the skill and then
+	// fail (or, worse, succeed at the manifest write but leave a dangling
+	// install scope referencing a phantom bot).
+	if spec.BotName != "" {
+		if _, bErr := c.v.GetBot(ctx, spec.BotName); bErr != nil {
+			if errors.Is(bErr, mgmt.ErrBotNotFound) {
+				return fmt.Errorf("sxvault: bot %q not found in vault", spec.BotName)
+			}
+			return fmt.Errorf("sxvault: checking bot %q: %w", spec.BotName, bErr)
+		}
+	}
 	ast := &lockfile.Asset{Name: spec.Name, Version: spec.Version, Type: asset.TypeSkill}
 	if err := c.addAsset(ctx, ast, zipData); err != nil {
 		return err

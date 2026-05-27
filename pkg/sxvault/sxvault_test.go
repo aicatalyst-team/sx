@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -264,6 +265,46 @@ func TestPutAgentRejectsUnknownSkill(t *testing.T) {
 	}
 }
 
+func TestPutAgentRejectsSkillsEntryOfWrongType(t *testing.T) {
+	ctx := context.Background()
+	_, client := newGitVaultClient(t)
+
+	// Seed an agent — its name must not be usable as a Skills entry.
+	if _, err := client.PutAgent(ctx, AgentSpec{
+		BotName:     "reviewer",
+		AssetName:   "secondary-agent",
+		Version:     "1.0.0",
+		Description: "Secondary agent.",
+		Prompt:      "You are secondary.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := client.PutAgent(ctx, AgentSpec{
+		BotName:   "reviewer",
+		AssetName: "main-agent",
+		Version:   "1.0.0",
+		Prompt:    "You are main.",
+		Skills:    []string{"secondary-agent"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "secondary-agent") || !strings.Contains(err.Error(), "not skill") {
+		t.Fatalf("PutAgent with agent in Skills: err = %v, want wrong-type error", err)
+	}
+}
+
+func TestPutSkillZipRejectsUnknownBot(t *testing.T) {
+	ctx := context.Background()
+	_, client := newGitVaultClient(t)
+	err := client.PutSkillZip(ctx, SkillZipSpec{
+		Name:    "lint-helper",
+		Version: "1.0.0",
+		ZipData: skillZip(t, "Lint carefully."),
+		BotName: "phantom",
+	})
+	if err == nil || !strings.Contains(err.Error(), "phantom") || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("PutSkillZip with unknown bot: err = %v, want bot-not-found error", err)
+	}
+}
+
 func TestPutAgentPreservesBotDescriptionAcrossPublishes(t *testing.T) {
 	ctx := context.Background()
 	remote, client := newGitVaultClient(t)
@@ -332,6 +373,46 @@ func TestBuildGitClientOptionsAuthTokenRouting(t *testing.T) {
 	if !strings.Contains(strings.Join(httpEnv, "\n"), "http.http://git.example.test/.extraheader") {
 		t.Fatalf("HTTP remote did not configure HTTP basic auth env: %v", httpEnv)
 	}
+	// HTTPS is the dominant real-world case; lock in that the basic-auth
+	// env header is set for https://github.com and that the default
+	// username on this host is "x-access-token".
+	githubEnv := envFromOptions(t, "https://github.com/org/repo.git", GitOptions{AuthToken: "token"})
+	if !strings.Contains(strings.Join(githubEnv, "\n"), "http.https://github.com/.extraheader") {
+		t.Fatalf("HTTPS GitHub remote did not configure HTTP basic auth env: %v", githubEnv)
+	}
+	user, pass := decodeBasicAuth(t, githubEnv)
+	if user != "x-access-token" || pass != "token" {
+		t.Fatalf("github.com basic auth = %q:%q, want x-access-token:token", user, pass)
+	}
+	// gitlab.com must pick the oauth2 username automatically — regression
+	// guard on the DefaultHTTPAuthUsername GitLab branch.
+	gitlabEnv := envFromOptions(t, "https://gitlab.com/org/repo.git", GitOptions{AuthToken: "token"})
+	user, pass = decodeBasicAuth(t, gitlabEnv)
+	if user != "oauth2" || pass != "token" {
+		t.Fatalf("gitlab.com basic auth = %q:%q, want oauth2:token", user, pass)
+	}
+}
+
+func decodeBasicAuth(t *testing.T, env []string) (string, string) {
+	t.Helper()
+	const prefix = "AUTHORIZATION: basic "
+	for _, e := range env {
+		_, encoded, ok := strings.Cut(e, prefix)
+		if !ok {
+			continue
+		}
+		raw, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			t.Fatalf("decode basic auth %q: %v", encoded, err)
+		}
+		user, pass, ok := strings.Cut(string(raw), ":")
+		if !ok {
+			t.Fatalf("basic auth payload missing colon: %q", raw)
+		}
+		return user, pass
+	}
+	t.Fatalf("env had no AUTHORIZATION header: %v", env)
+	return "", ""
 }
 
 func envFromOptions(t *testing.T, repoURL string, opts GitOptions) []string {
