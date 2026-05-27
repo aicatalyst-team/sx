@@ -33,6 +33,9 @@ type Actor struct {
 type GitOptions struct {
 	// AuthToken authenticates HTTP(S) git remotes through basic auth. SSH
 	// remotes ignore this value and use the caller's SSH configuration.
+	// SSHKeyPath takes precedence: when both are set with an HTTP(S) URL,
+	// the underlying git client rewrites the URL to SSH and AuthToken is
+	// not used.
 	AuthToken string
 
 	// AuthUsername is the HTTP(S) basic-auth username to pair with AuthToken.
@@ -47,6 +50,12 @@ type GitOptions struct {
 	// SSH private key for SSH remotes. It bypasses the process-global SSH
 	// key path set by the CLI's --ssh-key flag / SX_SSH_KEY env var, letting
 	// library consumers scope SSH auth to a single Client.
+	//
+	// When set with an HTTP(S) URL, the git client rewrites the URL to SSH
+	// at clone time and SSH key auth is what's used end-to-end —
+	// AuthToken is ignored on that combination. buildGitClientOptions
+	// drops the basic-auth env in this case so the resulting client carries
+	// no inert/conflicting credentials.
 	SSHKeyPath string
 
 	Actor Actor
@@ -207,15 +216,23 @@ func OpenGit(repoURL string, opts GitOptions) (*Client, error) {
 // git.Client.ExtraEnv accessor without reaching into vault internals.
 func buildGitClientOptions(repoURL string, opts GitOptions) ([]git.ClientOption, error) {
 	gitOpts := []git.ClientOption{git.WithCommitActor(opts.Actor.Name, opts.Actor.Email)}
+	sshKey := strings.TrimSpace(opts.SSHKeyPath)
 	if tok := strings.TrimSpace(opts.AuthToken); tok != "" {
 		info := git.ParseRemoteAuthInfo(repoURL)
-		if info.HTTP {
+		switch {
+		case info.HTTP && sshKey != "":
+			// SSH key wins: the git client rewrites HTTP(S) → SSH at
+			// clone time and the basic-auth extraheader env never
+			// runs. Skip WithHTTPBasicAuth so the client doesn't carry
+			// inert credentials that misrepresent what git actually
+			// uses.
+		case info.HTTP:
 			gitOpts = append(gitOpts, git.WithHTTPBasicAuth(info.Scheme, info.Host, git.DefaultHTTPAuthUsername(info.Host, opts.AuthUsername), tok))
-		} else if git.LooksLikeHTTPRemote(repoURL) {
+		case git.LooksLikeHTTPRemote(repoURL):
 			return nil, fmt.Errorf("sxvault: cannot derive git auth host from %q", repoURL)
 		}
 	}
-	if sshKey := strings.TrimSpace(opts.SSHKeyPath); sshKey != "" {
+	if sshKey != "" {
 		gitOpts = append(gitOpts, git.WithSSHKey(sshKey))
 	}
 	return gitOpts, nil
@@ -267,6 +284,14 @@ func (c *Client) EnsureBot(ctx context.Context, bot Bot) (string, error) {
 // original (any new Prompt / Description in spec is silently discarded); Git
 // vaults overwrite the stored bytes. Bump the version when you need a
 // guaranteed update across all backends.
+//
+// PutAgent is NOT transactional. The flow runs as: validate skills →
+// EnsureBot → upload asset → install agent on bot → install each skill on
+// bot. If any step after the asset upload fails (e.g. a transient git push
+// race on the Nth skill), partial install state is left in the vault. Every
+// step is idempotent, so the caller should retry the same PutAgent call to
+// converge — the asset upload no-ops on version match and the install path
+// is an upsert.
 func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, error) {
 	if c == nil || c.v == nil {
 		return AgentResult{}, errors.New("sxvault: nil client")
@@ -291,15 +316,27 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 		if len(versions) == 0 {
 			return AgentResult{}, fmt.Errorf("sxvault: skill %q not found in vault", skill)
 		}
-		// Asserting type=skill on the latest version blocks installing an
-		// agent (or any non-skill asset) under the Skills banner, which
-		// would otherwise silently leave the bot with two agents installed.
-		meta, mErr := c.v.GetMetadata(ctx, skill, versions[len(versions)-1])
-		if mErr != nil {
-			return AgentResult{}, fmt.Errorf("sxvault: reading metadata for %q: %w", skill, mErr)
+		// InstallAssetToBot references the asset by name, not by version, so
+		// the name is "a skill" when ANY version was published as type=skill.
+		// Iterate newest-published first so the common case (latest version
+		// is the real one) costs one metadata fetch. The version list is
+		// append-ordered, not semver-sorted — a backport published after a
+		// later release would otherwise mis-classify on the last entry.
+		var lastTypeKey string
+		isSkill := false
+		for i := len(versions) - 1; i >= 0; i-- {
+			meta, mErr := c.v.GetMetadata(ctx, skill, versions[i])
+			if mErr != nil {
+				return AgentResult{}, fmt.Errorf("sxvault: reading metadata for %q: %w", skill, mErr)
+			}
+			lastTypeKey = meta.Asset.Type.Key
+			if lastTypeKey == asset.TypeSkill.Key {
+				isSkill = true
+				break
+			}
 		}
-		if meta.Asset.Type.Key != asset.TypeSkill.Key {
-			return AgentResult{}, fmt.Errorf("sxvault: %q is type %q, not skill", skill, meta.Asset.Type.Key)
+		if !isSkill {
+			return AgentResult{}, fmt.Errorf("sxvault: %q is type %q, not skill", skill, lastTypeKey)
 		}
 	}
 	botKey, err := c.EnsureBot(ctx, Bot{Name: spec.BotName, Description: spec.BotDescription})
@@ -430,10 +467,15 @@ func (c *Client) addAsset(ctx context.Context, ast *lockfile.Asset, zipData []by
 		// for stored content. We still fall through to InheritInstallations
 		// so a retry after a half-failed prior publish (asset bytes
 		// written, manifest update never ran) can complete the install.
+		// Only Sleuth surfaces ErrVersionExists today; in that path we
+		// deliberately skip the SourcePath fallback below because the
+		// real asset lives behind an HTTP source on the server, not under
+		// the local assets/ tree the fallback fabricates.
 		var exists *vault.ErrVersionExists
 		if !errors.As(err, &exists) {
 			return err
 		}
+		return c.v.InheritInstallations(ctx, ast)
 	}
 	if ast.SourcePath == nil && ast.SourceHTTP == nil && ast.SourceGit == nil {
 		ast.SourcePath = &lockfile.SourcePath{Path: "assets/" + ast.Name + "/" + ast.Version}

@@ -391,6 +391,16 @@ func TestBuildGitClientOptionsAuthTokenRouting(t *testing.T) {
 	if user != "oauth2" || pass != "token" {
 		t.Fatalf("gitlab.com basic auth = %q:%q, want oauth2:token", user, pass)
 	}
+	// SSHKeyPath + AuthToken on an HTTPS URL: SSH key wins and the basic
+	// auth env must NOT be set, since the underlying git client rewrites
+	// the URL to SSH and the basic-auth header would never apply.
+	bothEnv := envFromOptions(t, "https://github.com/org/repo.git", GitOptions{
+		AuthToken:  "token",
+		SSHKeyPath: "/keys/id_ed25519",
+	})
+	if hasGitBasicAuthEnv(bothEnv) {
+		t.Fatalf("SSHKeyPath did not suppress HTTPS basic auth env: %v", bothEnv)
+	}
 }
 
 func decodeBasicAuth(t *testing.T, env []string) (string, string) {
