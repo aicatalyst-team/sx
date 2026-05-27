@@ -283,9 +283,6 @@ func TestPutAgentRejectsSkillsEntryOfWrongType(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// The skill pre-check filters the vault's skill set, so an agent name
-	// fails as "not found in vault" — same publish-rejection outcome as
-	// the wrong-type case from the caller's perspective.
 	_, err := client.PutAgent(ctx, AgentSpec{
 		BotName:   "reviewer",
 		AssetName: "main-agent",
@@ -293,8 +290,8 @@ func TestPutAgentRejectsSkillsEntryOfWrongType(t *testing.T) {
 		Prompt:    "You are main.",
 		Skills:    []string{"secondary-agent"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "secondary-agent") || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("PutAgent with agent in Skills: err = %v, want skill-not-found error", err)
+	if err == nil || !strings.Contains(err.Error(), "secondary-agent") || !strings.Contains(err.Error(), "not skill") {
+		t.Fatalf("PutAgent with agent in Skills: err = %v, want wrong-type error", err)
 	}
 }
 
@@ -319,7 +316,7 @@ func TestEnsureBotRejectsEmptyDescriptionOnCreate(t *testing.T) {
 func TestOpenPathRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	client, err := OpenPath(dir, Actor{Email: "test@example.com"})
+	client, err := OpenPath(dir, PathOptions{Actor: Actor{Email: "test@example.com"}})
 	if err != nil {
 		t.Fatalf("OpenPath: %v", err)
 	}
@@ -332,10 +329,10 @@ func TestOpenPathRoundTrip(t *testing.T) {
 	}
 	assertFileContains(t, filepath.Join(dir, "assets", "lint-helper", "1.0.0", "SKILL.md"), "Lint carefully.")
 
-	if _, err := OpenPath("", Actor{}); err == nil {
+	if _, err := OpenPath("", PathOptions{}); err == nil {
 		t.Fatal("OpenPath with empty path succeeded, want error")
 	}
-	if _, err := OpenPath(filepath.Join(dir, "missing-dir"), Actor{}); err == nil {
+	if _, err := OpenPath(filepath.Join(dir, "missing-dir"), PathOptions{}); err == nil {
 		t.Fatal("OpenPath against nonexistent dir succeeded, want error")
 	}
 }

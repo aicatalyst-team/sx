@@ -202,11 +202,21 @@ func OpenSkillsNewWithOptions(serverURL string, opts SkillsNewOptions) (*Client,
 	return &Client{v: vault.NewSleuthVault(serverURL, authToken), actor: opts.Actor}, nil
 }
 
+// PathOptions configures OpenPath. Path vaults have no auth surface —
+// local filesystem access is the trust boundary — so Actor is the only
+// knob, kept on a struct for future extension symmetric with GitOptions.
+type PathOptions struct {
+	// Actor identifies the caller for audit/identity context propagated
+	// via mgmt.ContextWithIdentity. PathVault doesn't consult identity
+	// directly today, but downstream audit / logging hooks read it
+	// through actorContext on every method call.
+	Actor Actor
+}
+
 // OpenPath opens a file-backed vault rooted at dir. The directory must
 // already exist; the underlying PathVault treats absent directories as a
-// hard error rather than auto-creating. Path vaults don't carry auth or an
-// actor — local filesystem access is the trust boundary.
-func OpenPath(dir string, actor Actor) (*Client, error) {
+// hard error rather than auto-creating.
+func OpenPath(dir string, opts PathOptions) (*Client, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
 		return nil, errors.New("sxvault: path required")
@@ -215,7 +225,7 @@ func OpenPath(dir string, actor Actor) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{v: pv, actor: actor}, nil
+	return &Client{v: pv, actor: opts.Actor}, nil
 }
 
 func OpenGit(repoURL string, opts GitOptions) (*Client, error) {
@@ -340,25 +350,27 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 	}
 	ctx = c.actorContext(ctx)
 	skills := cleanNames(spec.Skills)
-	if len(skills) > 0 {
-		// Pull the skill-typed assets in one call instead of looping
-		// GetVersionList + GetMetadata per name + per version. The set
-		// reflects the latest version's type per asset, which matches
-		// how InstallAssetToBot routes (by name, not by version): an
-		// asset whose latest release is no longer type=skill should not
-		// be installable as one.
-		known, lErr := c.v.ListAssets(ctx, vault.ListAssetsOptions{Type: asset.TypeSkill.Key})
-		if lErr != nil {
-			return AgentResult{}, fmt.Errorf("sxvault: listing skills: %w", lErr)
+	for _, skill := range skills {
+		// Per-skill GetVersionList + GetMetadata on the latest entry is
+		// 2 round-trips per skill, but the alternative (bulk ListAssets
+		// of type=skill) silently caps at 50 on Sleuth-backed vaults and
+		// would false-negative for any vault with more skills than that.
+		// The previous bulk approach traded correctness for speed; this
+		// keeps correctness. Each skill in spec.Skills costs 2 calls —
+		// keep the list modest or expect the validation to scale linearly.
+		versions, vErr := c.v.GetVersionList(ctx, skill)
+		if vErr != nil {
+			return AgentResult{}, fmt.Errorf("sxvault: checking skill %q: %w", skill, vErr)
 		}
-		present := make(map[string]struct{}, len(known.Assets))
-		for _, a := range known.Assets {
-			present[a.Name] = struct{}{}
+		if len(versions) == 0 {
+			return AgentResult{}, fmt.Errorf("sxvault: skill %q not found in vault", skill)
 		}
-		for _, skill := range skills {
-			if _, ok := present[skill]; !ok {
-				return AgentResult{}, fmt.Errorf("sxvault: skill %q not found in vault", skill)
-			}
+		meta, mErr := c.v.GetMetadata(ctx, skill, versions[len(versions)-1])
+		if mErr != nil {
+			return AgentResult{}, fmt.Errorf("sxvault: reading metadata for %q: %w", skill, mErr)
+		}
+		if meta.Asset.Type.Key != asset.TypeSkill.Key {
+			return AgentResult{}, fmt.Errorf("sxvault: %q is type %q, not skill", skill, meta.Asset.Type.Key)
 		}
 	}
 	botKey, err := c.EnsureBot(ctx, Bot{Name: spec.BotName, Description: spec.BotDescription})
@@ -451,9 +463,23 @@ func (c *Client) ListAssets(ctx context.Context, typ string) ([]AssetSummary, er
 }
 
 type ListOptions struct {
-	Type   string
+	// Type filters to a single asset-type key (e.g. "skill", "agent",
+	// "mcp"). Empty returns every type.
+	Type string
+	// Search filters returned assets by a free-text query. Semantics
+	// differ by backend: Git and Path vaults do a case-insensitive
+	// substring match against the asset's name OR description; Sleuth
+	// vaults pass the query to the backend's GraphQL search, which may
+	// rank or fuzzy-match. Don't depend on exact ordering or scoring
+	// across backends.
 	Search string
-	Limit  int
+	// Limit caps the number of returned assets. Zero or negative means
+	// "backend default" — for Git and Path that is uncapped; for Sleuth
+	// the backend silently caps at 50 regardless of the value passed,
+	// so callers that need to enumerate every asset in a large Sleuth
+	// vault need a different strategy (per-asset lookups) than this
+	// list call provides today.
+	Limit int
 }
 
 func (c *Client) ListAssetsWithOptions(ctx context.Context, opts ListOptions) ([]AssetSummary, error) {
