@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/sleuth-io/sx/internal/lockfile"
+	"github.com/sleuth-io/sx/internal/mgmt"
 )
 
 // mockSleuthGraphQL spins up a test server that dispatches on the
@@ -311,5 +312,132 @@ func TestSleuthVault_ListTeams_FilterPassesTerm(t *testing.T) {
 	rec := (*records)[0]
 	if _, ok := rec.Variables["term"]; !ok {
 		t.Error("expected $term variable in request")
+	}
+}
+
+func TestSleuthVault_CreateTeam_SetsAdminsAfterCreation(t *testing.T) {
+	srv, records := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"FindUser": func(vars map[string]any) any {
+			term := vars["term"].(string)
+			return map[string]any{
+				"organization": map[string]any{
+					"users": map[string]any{
+						"nodes": []any{
+							map[string]any{"id": "u-" + term, "email": term},
+						},
+					},
+				},
+			}
+		},
+		"CreateTeam": func(vars map[string]any) any {
+			return map[string]any{
+				"createTeam": map[string]any{
+					"team":   map[string]any{"id": "team-new", "name": "platform"},
+					"errors": []any{},
+				},
+			}
+		},
+		"ListTeams": func(vars map[string]any) any {
+			return map[string]any{
+				"organization": map[string]any{
+					"teams": map[string]any{
+						"nodes": []any{
+							map[string]any{
+								"id":                 "team-new",
+								"name":               "platform",
+								"adminMembers":       []any{},
+								"members":            map[string]any{"totalCount": 0, "nodes": []any{}},
+								"skillsRepositories": []any{},
+							},
+						},
+						"totalCount": 1,
+						"pageInfo":   map[string]any{"hasNextPage": false, "endCursor": nil},
+					},
+				},
+			}
+		},
+		"SetTeamAdmin": func(vars map[string]any) any {
+			return map[string]any{
+				"setTeamAdmin": map[string]any{
+					"team":   map[string]any{"id": "team-new"},
+					"errors": []any{},
+				},
+			}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	err := v.CreateTeam(context.Background(), mgmt.Team{
+		Name:    "platform",
+		Members: []string{"alice@example.com", "bob@example.com"},
+		Admins:  []string{"alice@example.com", "bob@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("CreateTeam failed: %v", err)
+	}
+
+	var ops []string
+	for _, r := range *records {
+		ops = append(ops, r.OperationName)
+	}
+	// Expect: FindUser(alice), FindUser(bob), CreateTeam, ListTeams(for teamGID), SetTeamAdmin(alice), ListTeams, SetTeamAdmin(bob)
+	createIdx := -1
+	setAdminCount := 0
+	for i, op := range ops {
+		if op == "CreateTeam" {
+			createIdx = i
+		}
+		if op == "SetTeamAdmin" {
+			setAdminCount++
+			if createIdx < 0 {
+				t.Fatal("SetTeamAdmin called before CreateTeam")
+			}
+		}
+	}
+	if createIdx < 0 {
+		t.Fatal("CreateTeam was never called")
+	}
+	if setAdminCount != 2 {
+		t.Errorf("expected 2 SetTeamAdmin calls, got %d; ops=%v", setAdminCount, ops)
+	}
+}
+
+func TestSleuthVault_CreateTeam_NoAdminsSkipsSetTeamAdmin(t *testing.T) {
+	srv, records := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"FindUser": func(vars map[string]any) any {
+			term := vars["term"].(string)
+			return map[string]any{
+				"organization": map[string]any{
+					"users": map[string]any{
+						"nodes": []any{
+							map[string]any{"id": "u-" + term, "email": term},
+						},
+					},
+				},
+			}
+		},
+		"CreateTeam": func(vars map[string]any) any {
+			return map[string]any{
+				"createTeam": map[string]any{
+					"team":   map[string]any{"id": "team-new", "name": "solo"},
+					"errors": []any{},
+				},
+			}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	err := v.CreateTeam(context.Background(), mgmt.Team{
+		Name:    "solo",
+		Members: []string{"alice@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("CreateTeam failed: %v", err)
+	}
+
+	for _, r := range *records {
+		if r.OperationName == "SetTeamAdmin" {
+			t.Fatal("SetTeamAdmin should not be called when no admins specified")
+		}
 	}
 }

@@ -123,12 +123,17 @@ are added — you are not added automatically.`,
 			// vaults, the server enforces org-admin. We resolve the
 			// actor up-front to surface "set git user.email" errors
 			// early rather than deep inside the transaction.
-			if _, err := v.CurrentActor(ctx); err != nil {
+			actor, err := v.CurrentActor(ctx)
+			if err != nil {
 				return err
 			}
 
+			effectiveAdmins := admins
+			if len(effectiveAdmins) == 0 {
+				effectiveAdmins = []string{actor.Email}
+			}
 			allMembers := append([]string(nil), members...)
-			for _, a := range admins {
+			for _, a := range effectiveAdmins {
 				if !slices.Contains(allMembers, a) {
 					allMembers = append(allMembers, a)
 				}
@@ -138,7 +143,7 @@ are added — you are not added automatically.`,
 				Name:         args[0],
 				Description:  description,
 				Members:      allMembers,
-				Admins:       admins,
+				Admins:       effectiveAdmins,
 				Repositories: repos,
 			}
 
