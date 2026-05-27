@@ -246,6 +246,7 @@ type BotApiKeyManager interface {
 // because access is granted by the vault checkout itself, not by API tokens.
 type BotRuntimeTokenManager interface {
 	CreateBotRuntimeToken(ctx context.Context, botName, label string, ttlSeconds int) (rawToken string, expiresAt time.Time, err error)
+	RevokeBotRuntimeTokens(ctx context.Context, botName string) (revokedCount int, err error)
 }
 
 // ScopeOption represents a vault-specific scope option (e.g., "personal", "team")

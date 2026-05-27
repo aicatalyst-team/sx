@@ -213,6 +213,46 @@ func TestSleuthVault_CreateBotRuntimeToken_QueryShape(t *testing.T) {
 	}
 }
 
+func TestSleuthVault_RevokeBotRuntimeTokens_QueryShape(t *testing.T) {
+	srv, records := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"ListBots": func(vars map[string]any) any {
+			return map[string]any{
+				"bots": []any{
+					map[string]any{
+						"id":          "bot-1",
+						"name":        "Reviewer",
+						"slug":        "reviewer",
+						"description": "Reviews pull requests.",
+						"teams":       []any{},
+					},
+				},
+			}
+		},
+		"RevokeBotRuntimeTokens": func(vars map[string]any) any {
+			if got, _ := vars["botId"].(string); got != "bot-1" {
+				t.Errorf("botId = %q, want bot-1", got)
+			}
+			return map[string]any{
+				"revokeBotRuntimeTokens": map[string]any{
+					"revokedCount": 2,
+				},
+			}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	revoked, err := v.RevokeBotRuntimeTokens(context.Background(), "Reviewer")
+	if err != nil {
+		t.Fatalf("RevokeBotRuntimeTokens failed: %v", err)
+	}
+	if revoked != 2 {
+		t.Fatalf("revoked = %d, want 2", revoked)
+	}
+	if len(*records) != 2 || (*records)[0].OperationName != "ListBots" || (*records)[1].OperationName != "RevokeBotRuntimeTokens" {
+		t.Fatalf("unexpected GraphQL operations: %+v", *records)
+	}
+}
+
 func TestSleuthVault_ListBots_ProjectsSlug(t *testing.T) {
 	srv, _ := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
 		"ListBots": func(vars map[string]any) any {

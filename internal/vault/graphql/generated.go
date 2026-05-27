@@ -1336,6 +1336,26 @@ func (v *RepositoryInstallationInput) GetUrl() string { return v.Url }
 // GetPaths returns RepositoryInstallationInput.Paths, and is useful for accessing the field via an interface.
 func (v *RepositoryInstallationInput) GetPaths() []string { return v.Paths }
 
+// RevokeBotRuntimeTokensResponse is returned by RevokeBotRuntimeTokens on success.
+type RevokeBotRuntimeTokensResponse struct {
+	RevokeBotRuntimeTokens *RevokeBotRuntimeTokensRevokeBotRuntimeTokensRevokeBotRuntimeTokensMutation `json:"revokeBotRuntimeTokens"`
+}
+
+// GetRevokeBotRuntimeTokens returns RevokeBotRuntimeTokensResponse.RevokeBotRuntimeTokens, and is useful for accessing the field via an interface.
+func (v *RevokeBotRuntimeTokensResponse) GetRevokeBotRuntimeTokens() *RevokeBotRuntimeTokensRevokeBotRuntimeTokensRevokeBotRuntimeTokensMutation {
+	return v.RevokeBotRuntimeTokens
+}
+
+// RevokeBotRuntimeTokensRevokeBotRuntimeTokensRevokeBotRuntimeTokensMutation includes the requested fields of the GraphQL type RevokeBotRuntimeTokensMutation.
+type RevokeBotRuntimeTokensRevokeBotRuntimeTokensRevokeBotRuntimeTokensMutation struct {
+	RevokedCount int `json:"revokedCount"`
+}
+
+// GetRevokedCount returns RevokeBotRuntimeTokensRevokeBotRuntimeTokensRevokeBotRuntimeTokensMutation.RevokedCount, and is useful for accessing the field via an interface.
+func (v *RevokeBotRuntimeTokensRevokeBotRuntimeTokensRevokeBotRuntimeTokensMutation) GetRevokedCount() int {
+	return v.RevokedCount
+}
+
 type SetAssetInstallationsInput struct {
 	AssetName    string                        `json:"assetName"`
 	AssetVersion *string                       `json:"assetVersion"`
@@ -3363,6 +3383,14 @@ type __RenameAssetInput struct {
 // GetInput returns __RenameAssetInput.Input, and is useful for accessing the field via an interface.
 func (v *__RenameAssetInput) GetInput() RenameAssetInput { return v.Input }
 
+// __RevokeBotRuntimeTokensInput is used internally by genqlient
+type __RevokeBotRuntimeTokensInput struct {
+	BotId string `json:"botId"`
+}
+
+// GetBotId returns __RevokeBotRuntimeTokensInput.BotId, and is useful for accessing the field via an interface.
+func (v *__RevokeBotRuntimeTokensInput) GetBotId() string { return v.BotId }
+
 // __SetAssetInstallationsInput is used internally by genqlient
 type __SetAssetInstallationsInput struct {
 	Input SetAssetInstallationsInput `json:"input"`
@@ -4172,6 +4200,40 @@ func RenameAsset(
 	}
 
 	data_ = &RenameAssetResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The mutation executed by RevokeBotRuntimeTokens.
+const RevokeBotRuntimeTokens_Operation = `
+mutation RevokeBotRuntimeTokens ($botId: ID!) {
+	revokeBotRuntimeTokens(botId: $botId) {
+		revokedCount
+	}
+}
+`
+
+func RevokeBotRuntimeTokens(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	botId string,
+) (data_ *RevokeBotRuntimeTokensResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "RevokeBotRuntimeTokens",
+		Query:  RevokeBotRuntimeTokens_Operation,
+		Variables: &__RevokeBotRuntimeTokensInput{
+			BotId: botId,
+		},
+	}
+
+	data_ = &RevokeBotRuntimeTokensResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(

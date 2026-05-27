@@ -90,6 +90,10 @@ func TestListBotsAndRuntimeTokens(t *testing.T) {
 	if !errors.Is(err, ErrBotRuntimeTokensUnsupported) {
 		t.Fatalf("CreateBotRuntimeToken on git vault err = %v, want ErrBotRuntimeTokensUnsupported", err)
 	}
+	_, err = client.RevokeBotRuntimeTokens(ctx, "ci")
+	if !errors.Is(err, ErrBotRuntimeTokensUnsupported) {
+		t.Fatalf("RevokeBotRuntimeTokens on git vault err = %v, want ErrBotRuntimeTokensUnsupported", err)
+	}
 }
 
 func TestPutAgentSameVersionIsIdempotent(t *testing.T) {

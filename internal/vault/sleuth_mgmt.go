@@ -768,6 +768,21 @@ func (s *SleuthVault) CreateBotRuntimeToken(ctx context.Context, botName, label 
 	return resp.CreateBotRuntimeToken.BotKey, resp.CreateBotRuntimeToken.ExpiresAt, nil
 }
 
+func (s *SleuthVault) RevokeBotRuntimeTokens(ctx context.Context, botName string) (int, error) {
+	gid, err := s.botGIDByName(ctx, botName)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := vaultgql.RevokeBotRuntimeTokens(ctx, s.gqlClient(), gid)
+	if err != nil {
+		return 0, err
+	}
+	if resp.RevokeBotRuntimeTokens == nil {
+		return 0, errors.New("missing revokeBotRuntimeTokens payload in response")
+	}
+	return resp.RevokeBotRuntimeTokens.RevokedCount, nil
+}
+
 func (s *SleuthVault) ListBotApiKeys(ctx context.Context, botName string) ([]mgmt.BotApiKey, error) {
 	slug, err := s.botSlugByName(ctx, botName)
 	if err != nil {

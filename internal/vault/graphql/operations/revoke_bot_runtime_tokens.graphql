@@ -1,0 +1,5 @@
+mutation RevokeBotRuntimeTokens($botId: ID!) {
+  revokeBotRuntimeTokens(botId: $botId) {
+    revokedCount
+  }
+}

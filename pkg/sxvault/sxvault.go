@@ -178,7 +178,7 @@ type BotRuntimeTokenResult struct {
 	ExpiresAt time.Time
 }
 
-// ErrBotRuntimeTokensUnsupported is returned by CreateBotRuntimeToken when the
+// ErrBotRuntimeTokensUnsupported is returned by runtime-token methods when the
 // underlying vault does not implement runtime tokens (i.e., any non-skills.new
 // backend). Callers should match with errors.Is to detect this case.
 var ErrBotRuntimeTokensUnsupported = errors.New("sxvault: bot runtime tokens are only supported by skills.new vaults")
@@ -554,6 +554,21 @@ func (c *Client) CreateBotRuntimeToken(ctx context.Context, spec BotRuntimeToken
 		return BotRuntimeTokenResult{}, err
 	}
 	return BotRuntimeTokenResult{Token: token, ExpiresAt: expiresAt}, nil
+}
+
+func (c *Client) RevokeBotRuntimeTokens(ctx context.Context, botName string) (int, error) {
+	if c == nil || c.v == nil {
+		return 0, errors.New("sxvault: nil client")
+	}
+	botName = strings.TrimSpace(botName)
+	if botName == "" {
+		return 0, errors.New("sxvault: bot name required")
+	}
+	manager, ok := c.v.(vault.BotRuntimeTokenManager)
+	if !ok {
+		return 0, ErrBotRuntimeTokensUnsupported
+	}
+	return manager.RevokeBotRuntimeTokens(c.actorContext(ctx), botName)
 }
 
 func (c *Client) InstallAssetToBot(ctx context.Context, assetName, botName string) error {
