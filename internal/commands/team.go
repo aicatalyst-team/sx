@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -118,15 +119,21 @@ are added — you are not added automatically.`,
 			// vaults, the server enforces org-admin. We resolve the
 			// actor up-front to surface "set git user.email" errors
 			// early rather than deep inside the transaction.
-			actor, err := v.CurrentActor(ctx)
-			if err != nil {
+			if _, err := v.CurrentActor(ctx); err != nil {
 				return err
+			}
+
+			allMembers := append([]string(nil), members...)
+			for _, a := range admins {
+				if !slices.Contains(allMembers, a) {
+					allMembers = append(allMembers, a)
+				}
 			}
 
 			team := mgmt.Team{
 				Name:         args[0],
 				Description:  description,
-				Members:      members,
+				Members:      allMembers,
 				Admins:       admins,
 				Repositories: repos,
 			}
@@ -138,16 +145,6 @@ are added — you are not added automatically.`,
 				return err
 			}
 			status.Done("Created team " + team.Name)
-
-			// CreateTeam adds the caller as member+admin only when no other
-			// admin was supplied (every team needs ≥1 admin). When the
-			// caller named an admin we trust the delegation and stay out
-			// of the roster. Surface whichever branch ran so the user
-			// isn't guessing at the resulting roster.
-			out := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
-			if len(admins) == 0 {
-				out.Info(fmt.Sprintf("You (%s) were added as a member and admin — every team needs at least one admin.", actor.Email))
-			}
 			return nil
 		},
 	}
@@ -395,7 +392,7 @@ func printTeamList(cmd *cobra.Command, result *vault.ListTeamsResult, filter str
 			} else if len(t.Admins) == 2 {
 				adminSummary = strings.Join(t.Admins[:2], ", ")
 			}
-			out.Muted(fmt.Sprintf("    admins: %s", adminSummary))
+			out.Muted("    admins: " + adminSummary)
 		}
 		if t.Description != "" {
 			out.Muted("    " + t.Description)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -759,5 +760,77 @@ func TestPathVault_ListTeams_FilterClientSide(t *testing.T) {
 		if !strings.Contains(team.Name, "platform") {
 			t.Errorf("team %q does not match filter 'platform'", team.Name)
 		}
+	}
+}
+
+func TestPathVault_CreateTeam_NoAdminsDefaultsToCaller(t *testing.T) {
+	mgmt.ResetActorCache()
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "alice@example.com")
+	runGit(t, dir, "config", "user.name", "Alice")
+
+	if err := manifest.Save(dir, &manifest.Manifest{SchemaVersion: manifest.CurrentSchemaVersion}); err != nil {
+		t.Fatalf("seed manifest: %v", err)
+	}
+	v, err := NewPathVault("file://" + dir)
+	if err != nil {
+		t.Fatalf("NewPathVault: %v", err)
+	}
+	ctx := context.Background()
+
+	if err := v.CreateTeam(ctx, mgmt.Team{
+		Name: "no-admins",
+	}); err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+
+	team, err := v.GetTeam(ctx, "no-admins")
+	if err != nil {
+		t.Fatalf("GetTeam: %v", err)
+	}
+	if !slices.Contains(team.Admins, "alice@example.com") {
+		t.Errorf("caller should be auto-added as admin, got admins=%v", team.Admins)
+	}
+	if !slices.Contains(team.Members, "alice@example.com") {
+		t.Errorf("caller should be auto-added as member, got members=%v", team.Members)
+	}
+}
+
+func TestPathVault_CreateTeam_ExplicitAdminNotCaller(t *testing.T) {
+	mgmt.ResetActorCache()
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "alice@example.com")
+	runGit(t, dir, "config", "user.name", "Alice")
+
+	if err := manifest.Save(dir, &manifest.Manifest{SchemaVersion: manifest.CurrentSchemaVersion}); err != nil {
+		t.Fatalf("seed manifest: %v", err)
+	}
+	v, err := NewPathVault("file://" + dir)
+	if err != nil {
+		t.Fatalf("NewPathVault: %v", err)
+	}
+	ctx := context.Background()
+
+	if err := v.CreateTeam(ctx, mgmt.Team{
+		Name:   "explicit-admin",
+		Admins: []string{"bob@example.com"},
+	}); err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+
+	team, err := v.GetTeam(ctx, "explicit-admin")
+	if err != nil {
+		t.Fatalf("GetTeam: %v", err)
+	}
+	if !slices.Contains(team.Admins, "bob@example.com") {
+		t.Errorf("explicit admin should be set, got admins=%v", team.Admins)
+	}
+	if slices.Contains(team.Admins, "alice@example.com") {
+		t.Errorf("caller should not be auto-added as admin when explicit admins given, got admins=%v", team.Admins)
+	}
+	if !slices.Contains(team.Members, "bob@example.com") {
+		t.Errorf("admin should be auto-added as member, got members=%v", team.Members)
 	}
 }

@@ -135,10 +135,17 @@ func (s *SleuthVault) CreateTeam(ctx context.Context, team mgmt.Team) error {
 	if err != nil {
 		return err
 	}
-	if resp.CreateTeam == nil {
-		return nil
+	if resp.CreateTeam != nil {
+		if err := gqlMutationErrors(resp.CreateTeam.Errors); err != nil {
+			return err
+		}
 	}
-	return gqlMutationErrors(resp.CreateTeam.Errors)
+	for _, admin := range team.Admins {
+		if err := s.SetTeamAdmin(ctx, team.Name, admin, true); err != nil {
+			return fmt.Errorf("failed to set admin %s: %w", admin, err)
+		}
+	}
+	return nil
 }
 
 func (s *SleuthVault) UpdateTeam(ctx context.Context, team mgmt.Team) error {
