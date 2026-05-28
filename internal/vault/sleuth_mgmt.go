@@ -313,19 +313,21 @@ func (s *SleuthVault) SetAssetInstallation(ctx context.Context, assetName string
 // the conversion. Only the fields actually read by callers are kept;
 // status and apiKeys were dead fields under the old hand-rolled struct.
 type sleuthBotNode struct {
-	ID          string
-	Name        string
-	Slug        string
-	Description string
-	Teams       []string // team names
+	ID              string
+	Name            string
+	Slug            string
+	Description     string
+	Teams           []string // team names
+	InstalledSkills []string
 }
 
 func sleuthBotToMgmt(node sleuthBotNode) mgmt.Bot {
 	return mgmt.Bot{
-		Name:        node.Name,
-		Slug:        node.Slug,
-		Description: node.Description,
-		Teams:       node.Teams,
+		Name:            node.Name,
+		Slug:            node.Slug,
+		Description:     node.Description,
+		Teams:           append([]string(nil), node.Teams...),
+		InstalledSkills: append([]string(nil), node.InstalledSkills...),
 	}
 }
 
@@ -352,12 +354,31 @@ func (s *SleuthVault) listBotNodes(ctx context.Context) ([]sleuthBotNode, error)
 		for j, t := range b.Teams {
 			teams[j] = t.Name
 		}
+		// Mirror the file-based path (resolvedBotSkillNames): dedupe and
+		// sort so mgmt.Bot.InstalledSkills has identical semantics across
+		// vault types. The server has no documented ordering or
+		// dedup guarantee on installedSkills.
+		seen := make(map[string]struct{}, len(b.InstalledSkills))
+		installedSkills := make([]string, 0, len(b.InstalledSkills))
+		for _, skill := range b.InstalledSkills {
+			name := strings.TrimSpace(skill.Name)
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			installedSkills = append(installedSkills, name)
+		}
+		slices.Sort(installedSkills)
 		nodes[i] = sleuthBotNode{
-			ID:          b.Id,
-			Name:        b.Name,
-			Slug:        b.Slug,
-			Description: b.Description,
-			Teams:       teams,
+			ID:              b.Id,
+			Name:            b.Name,
+			Slug:            b.Slug,
+			Description:     b.Description,
+			Teams:           teams,
+			InstalledSkills: installedSkills,
 		}
 	}
 	if len(nodes) >= sleuthBotListSoftCap {
@@ -563,9 +584,14 @@ func (s *SleuthVault) resolveTeamGIDs(ctx context.Context, names []string) ([]st
 	return out, nil
 }
 
-// assetGIDByName resolves an asset name to its server GID via the vault
-// assets search. Used for installSkillToBot/uninstallSkillFromBot, which
-// take skill GIDs rather than slugs.
+// assetGIDByName resolves an asset display name or slug to its server GID via
+// the vault assets search. ListAssets exposes slugs for Sleuth assets, while
+// older callers may still pass display names; bot install accepts both.
+//
+// Slugs are unique and stable, so we prefer slug matches over display-name
+// matches. If both a slug and a display-name match exist for different
+// assets, we return an ambiguity error rather than silently picking one
+// based on server ordering.
 func (s *SleuthVault) assetGIDByName(ctx context.Context, name string) (string, error) {
 	resp, err := vaultgql.AssetGID(ctx, s.gqlClient(), name)
 	if err != nil {
@@ -574,10 +600,24 @@ func (s *SleuthVault) assetGIDByName(ctx context.Context, name string) (string, 
 	// VaultAsset is a GraphQL interface with concrete subtypes
 	// (Skill, MCP, Agent, ClaudeCodePlugin, ...). Use the interface
 	// getters to avoid switching on every variant.
+	name = strings.TrimSpace(name)
+	var slugMatch, nameMatch string
 	for _, n := range resp.Vault.Assets.Nodes {
-		if n.GetName() == name {
-			return n.GetId(), nil
+		if n.GetSlug() == name && slugMatch == "" {
+			slugMatch = n.GetId()
 		}
+		if n.GetName() == name && n.GetSlug() != name && nameMatch == "" {
+			nameMatch = n.GetId()
+		}
+	}
+	if slugMatch != "" && nameMatch != "" {
+		return "", fmt.Errorf("asset %q is ambiguous: matches both a slug and a different display name", name)
+	}
+	if slugMatch != "" {
+		return slugMatch, nil
+	}
+	if nameMatch != "" {
+		return nameMatch, nil
 	}
 	return "", fmt.Errorf("asset %q not found", name)
 }

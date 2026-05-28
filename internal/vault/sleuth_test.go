@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -169,6 +170,10 @@ func TestSleuthVault_CreateBotRuntimeToken_QueryShape(t *testing.T) {
 						"slug":        "reviewer",
 						"description": "Reviews pull requests.",
 						"teams":       []any{},
+						"installedSkills": []any{
+							map[string]any{"name": "fix-pr"},
+							map[string]any{"name": "webapp-testing"},
+						},
 					},
 				},
 			}
@@ -224,6 +229,10 @@ func TestSleuthVault_RevokeBotRuntimeTokens_QueryShape(t *testing.T) {
 						"slug":        "reviewer",
 						"description": "Reviews pull requests.",
 						"teams":       []any{},
+						"installedSkills": []any{
+							map[string]any{"name": "fix-pr"},
+							map[string]any{"name": "webapp-testing"},
+						},
 					},
 				},
 			}
@@ -254,6 +263,9 @@ func TestSleuthVault_RevokeBotRuntimeTokens_QueryShape(t *testing.T) {
 }
 
 func TestSleuthVault_ListBots_ProjectsSlug(t *testing.T) {
+	// Server returns installedSkills in non-alphabetical order with a
+	// duplicate to verify the Sleuth path dedupes and sorts (matching the
+	// file-based path's contract on mgmt.Bot.InstalledSkills).
 	srv, _ := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
 		"ListBots": func(vars map[string]any) any {
 			return map[string]any{
@@ -264,6 +276,11 @@ func TestSleuthVault_ListBots_ProjectsSlug(t *testing.T) {
 						"slug":        "reviewer",
 						"description": "Reviews pull requests.",
 						"teams":       []any{},
+						"installedSkills": []any{
+							map[string]any{"name": "webapp-testing"},
+							map[string]any{"name": "fix-pr"},
+							map[string]any{"name": "fix-pr"},
+						},
 					},
 				},
 			}
@@ -280,6 +297,191 @@ func TestSleuthVault_ListBots_ProjectsSlug(t *testing.T) {
 	}
 	if bots[0].Slug != "reviewer" {
 		t.Fatalf("bots[0].Slug = %q, want reviewer", bots[0].Slug)
+	}
+	want := []string{"fix-pr", "webapp-testing"}
+	if !slices.Equal(bots[0].InstalledSkills, want) {
+		t.Fatalf("bots[0].InstalledSkills = %v, want %v (sorted, deduped)", bots[0].InstalledSkills, want)
+	}
+}
+
+func TestSleuthVault_InstallSkillToBotResolvesListedSkillSlug(t *testing.T) {
+	srv, records := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"ListBots": func(vars map[string]any) any {
+			return map[string]any{
+				"bots": []any{
+					map[string]any{
+						"id":          "bot-1",
+						"name":        "testers",
+						"slug":        "testers",
+						"description": "Tests stuff",
+						"teams":       []any{},
+					},
+				},
+			}
+		},
+		"AssetGID": func(vars map[string]any) any {
+			if got := vars["search"]; got != "fix-pr" {
+				t.Fatalf("AssetGID search = %v, want fix-pr", got)
+			}
+			return map[string]any{
+				"vault": map[string]any{
+					"assets": map[string]any{
+						"nodes": []any{
+							map[string]any{
+								"__typename": "Skill",
+								"id":         "skill-1",
+								"name":       "Fix PR",
+								"slug":       "fix-pr",
+							},
+						},
+					},
+				},
+			}
+		},
+		"InstallSkillToBot": func(vars map[string]any) any {
+			if got := vars["botId"]; got != "bot-1" {
+				t.Fatalf("InstallSkillToBot botId = %v, want bot-1", got)
+			}
+			if got := vars["skillId"]; got != "skill-1" {
+				t.Fatalf("InstallSkillToBot skillId = %v, want skill-1", got)
+			}
+			return map[string]any{
+				"installSkillToBot": map[string]any{
+					"success": true,
+					"errors":  []any{},
+				},
+			}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	if err := v.SetAssetInstallation(context.Background(), "fix-pr", InstallTarget{Kind: InstallKindBot, Bot: "testers"}); err != nil {
+		t.Fatalf("SetAssetInstallation by slug failed: %v", err)
+	}
+
+	var ops []string
+	for _, rec := range *records {
+		ops = append(ops, rec.OperationName)
+	}
+	if got := strings.Join(ops, ","); got != "ListBots,AssetGID,InstallSkillToBot" {
+		t.Fatalf("operations = %s", got)
+	}
+}
+
+// TestSleuthVault_InstallSkillToBot_SlugMatchOrderIndependent covers the
+// case where a slug-matching asset is preceded by unrelated (non-matching)
+// assets in the search response. The slug match must still win — the
+// resolver must not depend on the asset's position in the response.
+func TestSleuthVault_InstallSkillToBot_SlugMatchOrderIndependent(t *testing.T) {
+	srv, _ := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"ListBots": func(vars map[string]any) any {
+			return map[string]any{
+				"bots": []any{
+					map[string]any{
+						"id":          "bot-1",
+						"name":        "testers",
+						"slug":        "testers",
+						"description": "Tests stuff",
+						"teams":       []any{},
+					},
+				},
+			}
+		},
+		"AssetGID": func(vars map[string]any) any {
+			return map[string]any{
+				"vault": map[string]any{
+					"assets": map[string]any{
+						"nodes": []any{
+							// Search-prefix matches that don't equal the
+							// input listed first so that a first-match
+							// policy would return the wrong id.
+							map[string]any{
+								"__typename": "Skill",
+								"id":         "wrong-id",
+								"name":       "fix-pr-extras",
+								"slug":       "fix-pr-extras",
+							},
+							map[string]any{
+								"__typename": "Skill",
+								"id":         "right-id",
+								"name":       "Fix PR",
+								"slug":       "fix-pr",
+							},
+						},
+					},
+				},
+			}
+		},
+		"InstallSkillToBot": func(vars map[string]any) any {
+			if got := vars["skillId"]; got != "right-id" {
+				t.Fatalf("InstallSkillToBot skillId = %v, want right-id (slug match)", got)
+			}
+			return map[string]any{
+				"installSkillToBot": map[string]any{
+					"success": true,
+					"errors":  []any{},
+				},
+			}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	if err := v.SetAssetInstallation(context.Background(), "fix-pr", InstallTarget{Kind: InstallKindBot, Bot: "testers"}); err != nil {
+		t.Fatalf("SetAssetInstallation: %v", err)
+	}
+}
+
+// TestSleuthVault_InstallSkillToBot_AmbiguousMatchErrors covers the case
+// where the asset-search response contains both a slug-matching asset and
+// a *different* display-name-matching asset. Without ambiguity detection,
+// either could be returned depending on server ordering — instead the
+// install must surface a clear error.
+func TestSleuthVault_InstallSkillToBot_AmbiguousMatchErrors(t *testing.T) {
+	srv, _ := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"ListBots": func(vars map[string]any) any {
+			return map[string]any{
+				"bots": []any{
+					map[string]any{
+						"id":          "bot-1",
+						"name":        "testers",
+						"slug":        "testers",
+						"description": "Tests stuff",
+						"teams":       []any{},
+					},
+				},
+			}
+		},
+		"AssetGID": func(vars map[string]any) any {
+			return map[string]any{
+				"vault": map[string]any{
+					"assets": map[string]any{
+						"nodes": []any{
+							map[string]any{
+								"__typename": "Skill",
+								"id":         "name-asset",
+								"name":       "fix-pr",
+								"slug":       "another-slug",
+							},
+							map[string]any{
+								"__typename": "Skill",
+								"id":         "slug-asset",
+								"name":       "Fix PR",
+								"slug":       "fix-pr",
+							},
+						},
+					},
+				},
+			}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	err := v.SetAssetInstallation(context.Background(), "fix-pr", InstallTarget{Kind: InstallKindBot, Bot: "testers"})
+	if err == nil {
+		t.Fatalf("expected ambiguity error, got nil")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("expected ambiguity error, got: %v", err)
 	}
 }
 

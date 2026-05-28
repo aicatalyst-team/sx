@@ -442,6 +442,21 @@ func TestPathVault_BotLifecycleE2E(t *testing.T) {
 		t.Fatalf("SetAssetInstallation (team): %v", err)
 	}
 
+	bots, err := v.ListBots(ctx)
+	if err != nil {
+		t.Fatalf("ListBots: %v", err)
+	}
+	if len(bots) != 1 {
+		t.Fatalf("ListBots returned %d bots, want 1", len(bots))
+	}
+	// The helper returns InstalledSkills sorted, so pin the exact set so a
+	// future regression that adds duplicates or includes other-bot/user
+	// skills is caught — not just the contains/not-contains pattern.
+	wantSkills := []string{"direct", "global", "team-only"}
+	if !slices.Equal(bots[0].InstalledSkills, wantSkills) {
+		t.Errorf("bot[0].InstalledSkills = %v, want %v", bots[0].InstalledSkills, wantSkills)
+	}
+
 	// 4. Resolve the lock file as the bot identity (SX_BOT).
 	mgmt.ResetActorCache()
 	t.Setenv("SX_BOT", "python-backend")
@@ -473,6 +488,29 @@ func TestPathVault_BotLifecycleE2E(t *testing.T) {
 	t.Setenv("SX_BOT", "python-backend")
 	if _, err := v.CreateBot(ctx, mgmt.Bot{Name: "another"}); err == nil {
 		t.Error("bot identity should not be allowed to mutate vault state")
+	}
+
+	// 6. Deleting the bot must not promote bot-only assets to global. The
+	// manifest represents global install as an asset with no scopes, so a
+	// bot-delete cascade has to drop entries that were only scoped to the
+	// deleted bot.
+	mgmt.ResetActorCache()
+	t.Setenv("SX_BOT", "")
+	if err := v.DeleteBot(ctx, "python-backend"); err != nil {
+		t.Fatalf("DeleteBot: %v", err)
+	}
+	updated, _, err := manifest.Load(dir)
+	if err != nil {
+		t.Fatalf("load manifest after DeleteBot: %v", err)
+	}
+	if direct := updated.FindAsset("direct"); direct != nil {
+		t.Fatalf("bot-only asset survived DeleteBot with scopes %+v; empty scopes would install it globally", direct.Scopes)
+	}
+	if teamOnly := updated.FindAsset("team-only"); teamOnly == nil {
+		t.Fatal("team-scoped asset should survive DeleteBot")
+	}
+	if global := updated.FindAsset("global"); global == nil || len(global.Scopes) != 0 {
+		t.Fatalf("global asset after DeleteBot = %+v, want retained global asset", global)
 	}
 }
 

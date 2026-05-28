@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/sleuth-io/sx/internal/git"
 )
@@ -31,13 +32,90 @@ func TestGitPutAgentWritesSXVaultFormat(t *testing.T) {
 	}
 
 	clone := cloneRemote(t, remote)
-	assertFileContains(t, filepath.Join(clone, "assets", "reviewer", "1.0.0", "AGENT.md"), "You are Reviewer.")
+	agentPath := filepath.Join(clone, "assets", "reviewer", "1.0.0", "AGENT.md")
+	assertFileContains(t, agentPath, "---\nname: reviewer\ndescription: \"Reviews pull requests.\"\n---")
+	assertFileContains(t, agentPath, "You are Reviewer.")
 	assertFileContains(t, filepath.Join(clone, "assets", "reviewer", "1.0.0", "metadata.toml"), `type = "agent"`)
 	manifest := readFile(t, filepath.Join(clone, "sx.toml"))
 	for _, want := range []string{`name = "reviewer"`, `kind = "bot"`, `bot = "reviewer"`} {
 		if !strings.Contains(manifest, want) {
 			t.Fatalf("sx.toml missing %q:\n%s", want, manifest)
 		}
+	}
+}
+
+func TestAgentMarkdownPreservesExistingFrontmatter(t *testing.T) {
+	got := agentMarkdown(AgentSpec{
+		AssetName:   "reviewer",
+		Description: "Reviews pull requests.",
+		Prompt:      "---\nname: custom-reviewer\ndescription: Custom description.\n---\n\nUse this body.",
+	})
+	if strings.Count(got, "---") != 2 {
+		t.Fatalf("agentMarkdown duplicated frontmatter:\n%s", got)
+	}
+	if !strings.Contains(got, "name: custom-reviewer") {
+		t.Fatalf("agentMarkdown did not preserve supplied frontmatter:\n%s", got)
+	}
+}
+
+// TestAgentMarkdownWrapsPromptStartingWithHorizontalRule covers a prompt
+// that opens with a markdown horizontal rule (---) but has no closing
+// frontmatter terminator. The wrapper must still inject name+description
+// frontmatter rather than treating the leading --- as existing frontmatter.
+func TestAgentMarkdownWrapsPromptStartingWithHorizontalRule(t *testing.T) {
+	got := agentMarkdown(AgentSpec{
+		AssetName:   "reviewer",
+		Description: "Reviews PRs.",
+		Prompt:      "---\n\nThis is a body that starts with a horizontal rule.",
+	})
+	if !strings.HasPrefix(got, "---\nname: reviewer\ndescription: \"Reviews PRs.\"\n---\n\n") {
+		t.Fatalf("agentMarkdown did not inject frontmatter:\n%s", got)
+	}
+}
+
+// TestAgentFrontmatterDescriptionEscapesYAMLSpecials guards against
+// descriptions whose raw value would yield invalid YAML if pasted
+// unquoted into the frontmatter (colon-space, leading dash, quote, etc).
+func TestAgentFrontmatterDescriptionEscapesYAMLSpecials(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "colon-space", input: "Reviews: handles PRs", want: `"Reviews: handles PRs"`},
+		{name: "leading dash", input: "- starts with dash", want: `"- starts with dash"`},
+		{name: "double quote", input: `she said "hi"`, want: `"she said \"hi\""`},
+		{name: "backslash", input: `path\to\thing`, want: `"path\\to\\thing"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := agentFrontmatterDescription(tc.input); got != tc.want {
+				t.Fatalf("agentFrontmatterDescription(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAgentFrontmatterDescriptionTruncatesByRune guards against splitting
+// a multi-byte UTF-8 sequence when the description exceeds the 1024-rune
+// limit. A 1024-rune cap of 4-byte runes is ~4096 bytes; truncation must
+// happen on a rune boundary so the result is valid UTF-8.
+func TestAgentFrontmatterDescriptionTruncatesByRune(t *testing.T) {
+	// Build a 2000-rune string using a 4-byte rune (😀) so byte-truncation
+	// at 1024 would cleave a rune in half.
+	const rune4Byte = "😀"
+	long := strings.Repeat(rune4Byte, 2000)
+	got := agentFrontmatterDescription(long)
+	// Strip the wrapping quotes that yamlQuote adds.
+	if !strings.HasPrefix(got, `"`) || !strings.HasSuffix(got, `"`) {
+		t.Fatalf("expected quoted scalar, got %q", got)
+	}
+	inner := got[1 : len(got)-1]
+	if !utf8.ValidString(inner) {
+		t.Fatalf("truncated description is not valid UTF-8")
+	}
+	if got := utf8.RuneCountInString(inner); got != 1024 {
+		t.Fatalf("rune count after truncation = %d, want 1024", got)
 	}
 }
 
@@ -94,6 +172,46 @@ func TestListBotsAndRuntimeTokens(t *testing.T) {
 	if !errors.Is(err, ErrBotRuntimeTokensUnsupported) {
 		t.Fatalf("RevokeBotRuntimeTokens on git vault err = %v, want ErrBotRuntimeTokensUnsupported", err)
 	}
+}
+
+func TestDeleteBotRemovesBotAndBotScopes(t *testing.T) {
+	ctx := context.Background()
+	remote, client := newGitVaultClient(t)
+
+	if _, err := client.EnsureBot(ctx, Bot{Name: "reviewer-bot", Description: "Reviewer bot."}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.PutSkillZip(ctx, SkillZipSpec{
+		Name:        "lint-helper",
+		Version:     "1",
+		Description: "Helps with lint fixes.",
+		BotName:     "reviewer-bot",
+		ZipData:     skillZip(t, "Lint carefully."),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.DeleteBot(ctx, "reviewer-bot"); err != nil {
+		t.Fatal(err)
+	}
+	bots, err := client.ListBots(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bots) != 0 {
+		t.Fatalf("ListBots after DeleteBot = %+v, want none", bots)
+	}
+
+	clone := cloneRemote(t, remote)
+	manifest := readFile(t, filepath.Join(clone, "sx.toml"))
+	for _, unwanted := range []string{`name = "reviewer-bot"`, `bot = "reviewer-bot"`} {
+		if strings.Contains(manifest, unwanted) {
+			t.Fatalf("sx.toml still contains %q after DeleteBot:\n%s", unwanted, manifest)
+		}
+	}
+	if strings.Contains(manifest, `name = "lint-helper"`) {
+		t.Fatalf("bot-only skill asset stayed in sx.toml after DeleteBot; this would make it global:\n%s", manifest)
+	}
+	assertFileContains(t, filepath.Join(clone, "assets", "lint-helper", "1", "SKILL.md"), "Lint carefully.")
 }
 
 func TestPutAgentSameVersionIsIdempotent(t *testing.T) {
@@ -209,6 +327,13 @@ func TestPutSkillZipWithAndWithoutBotInstall(t *testing.T) {
 		BotName:     "reviewer",
 	}); err != nil {
 		t.Fatal(err)
+	}
+	bots, err := client.ListBots(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bots) != 1 || !slices.Contains(bots[0].InstalledSkills, "test-helper") {
+		t.Fatalf("ListBots returned installed skills %+v, want test-helper", bots)
 	}
 
 	clone := cloneRemote(t, remote)

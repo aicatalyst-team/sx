@@ -1,8 +1,8 @@
 // Package sxvault exposes a small, stable management facade over SX vaults.
 //
 // Scope: this facade currently covers the publish / manage write path
-// (OpenSkillsNew / OpenGit / OpenPath constructors; EnsureBot, PutAgent,
-// PutSkillZip, InstallAssetToBot mutators; ListAssets read-only browse).
+// (OpenSkillsNew / OpenGit / OpenPath constructors; EnsureBot, DeleteBot,
+// PutAgent, PutSkillZip, InstallAssetToBot mutators; ListAssets read-only browse).
 // Read-side primitives that the internal vault.Vault interface supports —
 // GetMetadata, GetAssetByVersion, RemoveAsset, RenameAsset, asset-uninstall —
 // are intentionally NOT re-exported yet and are reserved for a follow-up
@@ -15,8 +15,10 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Masterminds/semver/v3"
 
@@ -156,10 +158,11 @@ type AgentResult struct {
 }
 
 type BotSummary struct {
-	Name        string
-	Slug        string
-	Description string
-	Teams       []string
+	Name            string
+	Slug            string
+	Description     string
+	Teams           []string
+	InstalledSkills []string
 }
 
 type BotRuntimeTokenSpec struct {
@@ -523,13 +526,28 @@ func (c *Client) ListBots(ctx context.Context) ([]BotSummary, error) {
 	out := make([]BotSummary, 0, len(bots))
 	for _, b := range bots {
 		out = append(out, BotSummary{
-			Name:        b.Name,
-			Slug:        b.Slug,
-			Description: b.Description,
-			Teams:       append([]string(nil), b.Teams...),
+			Name:            b.Name,
+			Slug:            b.Slug,
+			Description:     b.Description,
+			Teams:           append([]string(nil), b.Teams...),
+			InstalledSkills: append([]string(nil), b.InstalledSkills...),
 		})
 	}
 	return out, nil
+}
+
+// DeleteBot removes the named bot from the vault. File-backed vaults also
+// remove any bot-scoped asset installations targeting that bot; asset versions
+// themselves remain in the vault.
+func (c *Client) DeleteBot(ctx context.Context, botName string) error {
+	if c == nil || c.v == nil {
+		return errors.New("sxvault: nil client")
+	}
+	botName = strings.TrimSpace(botName)
+	if botName == "" {
+		return errors.New("sxvault: bot name required")
+	}
+	return c.v.DeleteBot(c.actorContext(ctx), botName)
 }
 
 func (c *Client) CreateBotRuntimeToken(ctx context.Context, spec BotRuntimeTokenSpec) (BotRuntimeTokenResult, error) {
@@ -674,7 +692,7 @@ func (c *Client) actorContext(ctx context.Context) context.Context {
 }
 
 func agentZip(spec AgentSpec) ([]byte, error) {
-	prompt := []byte(strings.TrimSpace(spec.Prompt) + "\n")
+	prompt := []byte(agentMarkdown(spec))
 	zipData, err := utils.CreateZipFromContent("AGENT.md", prompt)
 	if err != nil {
 		return nil, err
@@ -694,6 +712,77 @@ func agentZip(spec AgentSpec) ([]byte, error) {
 		return nil, err
 	}
 	return utils.AddFileToZip(zipData, "metadata.toml", metaBytes)
+}
+
+func agentMarkdown(spec AgentSpec) string {
+	prompt := strings.TrimSpace(spec.Prompt)
+	if hasFrontmatter(prompt) {
+		return prompt + "\n"
+	}
+	name := agentFrontmatterName(spec.AssetName)
+	description := agentFrontmatterDescription(spec.Description, spec.BotDescription, spec.AssetName)
+	return "---\nname: " + name + "\ndescription: " + description + "\n---\n\n" + prompt + "\n"
+}
+
+// hasFrontmatter reports whether s already begins with a YAML frontmatter
+// block (a leading line of exactly --- and a later closing line of exactly
+// ---), as opposed to merely starting with a markdown horizontal rule.
+func hasFrontmatter(s string) bool {
+	lines := strings.Split(s, "\n")
+	if len(lines) < 2 || lines[0] != "---" {
+		return false
+	}
+	return slices.Contains(lines[1:], "---")
+}
+
+func agentFrontmatterName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastDash = false
+		case r == '-' || r == '_' || r == ' ' || r == '.':
+			if !lastDash && b.Len() > 0 {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if len(out) > 64 {
+		out = strings.Trim(out[:64], "-")
+	}
+	if out == "" {
+		return "agent"
+	}
+	return out
+}
+
+func agentFrontmatterDescription(values ...string) string {
+	for _, value := range values {
+		value = strings.Join(strings.Fields(value), " ")
+		if value == "" {
+			continue
+		}
+		if utf8.RuneCountInString(value) > 1024 {
+			runes := []rune(value)
+			value = string(runes[:1024])
+		}
+		return yamlQuote(value)
+	}
+	return yamlQuote("Custom agent")
+}
+
+// yamlQuote wraps a string in YAML double-quoted scalar form, escaping
+// backslashes and double quotes. This is always-safe: callers don't need
+// to think about colons, leading dashes, or other YAML-special chars.
+func yamlQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return `"` + s + `"`
 }
 
 func normalizeSkillZip(spec SkillZipSpec) ([]byte, error) {

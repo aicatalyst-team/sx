@@ -39,6 +39,10 @@ type Bot struct {
 	Slug        string
 	Description string
 	Teams       []string
+	// InstalledSkills is the bot's resolved skill set (direct + team
+	// + org-wide installs), deduplicated and sorted. Vault implementations
+	// must present the same shape so callers don't branch on vault type.
+	InstalledSkills []string
 }
 
 // IsOnTeam returns true if the bot is a member of the named team.
