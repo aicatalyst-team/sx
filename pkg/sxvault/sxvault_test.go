@@ -776,6 +776,11 @@ func TestPutSkillZipRejectsUnknownBot(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "phantom") || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("PutSkillZip with unknown bot: err = %v, want bot-not-found error", err)
 	}
+	// The sentinel must propagate so consumers can branch on it (same
+	// contract UninstallAssetFromBot pins).
+	if !errors.Is(err, ErrBotNotFound) {
+		t.Fatalf("PutSkillZip unknown bot err = %v, want errors.Is ErrBotNotFound", err)
+	}
 }
 
 func TestPutAgentPreservesBotDescriptionAcrossPublishes(t *testing.T) {

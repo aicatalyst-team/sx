@@ -291,7 +291,6 @@ type SourceHandler interface {
 	Fetch(ctx context.Context, asset *lockfile.Asset) ([]byte, error)
 }
 
-// ListAssetsOptions contains options for listing vault assets
 // DefaultTeamsLimit is the server-side maximum number of teams a single
 // ListTeams query returns. It is the one source of truth for that cap: the
 // Sleuth lookup paths request it, and the pkg/sxvault facade references it
@@ -312,6 +311,7 @@ type ListTeamsResult struct {
 	HasMore    bool // True when more teams exist beyond Limit
 }
 
+// ListAssetsOptions contains options for listing vault assets
 type ListAssetsOptions struct {
 	Type   string // Filter by asset type (skill, mcp, etc.)
 	Search string // Search query for filtering assets

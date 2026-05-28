@@ -535,7 +535,7 @@ func (c *Client) PutSkillZip(ctx context.Context, spec SkillZipSpec) error {
 	if spec.BotName != "" {
 		if _, bErr := c.v.GetBot(ctx, spec.BotName); bErr != nil {
 			if errors.Is(bErr, mgmt.ErrBotNotFound) {
-				return fmt.Errorf("sxvault: bot %q not found in vault", spec.BotName)
+				return fmt.Errorf("sxvault: bot %q not found in vault: %w", spec.BotName, ErrBotNotFound)
 			}
 			return fmt.Errorf("sxvault: checking bot %q: %w", spec.BotName, bErr)
 		}
