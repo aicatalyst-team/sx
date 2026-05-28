@@ -241,6 +241,80 @@ func TestPathVault_TeamUserLifecycleE2E(t *testing.T) {
 }
 
 // TestPathVault_BotUpdate_PreservesTeams pins the contract that a
+// TestPathVault_PathInstall_OrderInsensitive verifies that a path-scoped
+// install can be removed regardless of the order the caller lists the
+// paths in. Set and remove both canonicalize (sort) the path list, so
+// Set(["docs","api"]) is removed by Remove(["api","docs"]).
+func TestPathVault_PathInstall_OrderInsensitive(t *testing.T) {
+	mgmt.ResetActorCache()
+	dir := t.TempDir()
+
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "alice@example.com")
+	runGit(t, dir, "config", "user.name", "Alice")
+
+	if err := manifest.Save(dir, &manifest.Manifest{
+		SchemaVersion: manifest.CurrentSchemaVersion,
+		Assets: []manifest.Asset{
+			{
+				Name:       "my-skill",
+				Version:    "1.0.0",
+				Type:       asset.TypeSkill,
+				SourceHTTP: &manifest.SourceHTTP{URL: "https://example.com/my-skill.zip"},
+				// A baseline repo scope so the asset row survives after the
+				// path scope is removed (a row left with zero scopes is dropped).
+				Scopes: []manifest.Scope{
+					{Kind: manifest.ScopeKindRepo, Repo: "github.com/acme/baseline"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed manifest: %v", err)
+	}
+	v, err := NewPathVault("file://" + dir)
+	if err != nil {
+		t.Fatalf("NewPathVault: %v", err)
+	}
+	ctx := context.Background()
+	repo := "github.com/acme/infra"
+
+	if err := v.SetAssetInstallation(ctx, "my-skill", InstallTarget{
+		Kind:  InstallKindPath,
+		Repo:  repo,
+		Paths: []string{"docs", "api"},
+	}); err != nil {
+		t.Fatalf("SetAssetInstallation: %v", err)
+	}
+
+	// Remove with the paths in the opposite order — must still match the
+	// stored row and drop the scope.
+	if err := v.RemoveAssetInstallation(ctx, "my-skill", InstallTarget{
+		Kind:  InstallKindPath,
+		Repo:  repo,
+		Paths: []string{"api", "docs"},
+	}); err != nil {
+		t.Fatalf("RemoveAssetInstallation: %v", err)
+	}
+
+	m, _, err := manifest.LoadOrMigrate(dir)
+	if err != nil {
+		t.Fatalf("reload manifest: %v", err)
+	}
+	found := m.FindAsset("my-skill")
+	if found == nil {
+		t.Fatal("my-skill missing from manifest")
+	}
+	for _, s := range found.Scopes {
+		if s.Kind == manifest.ScopeKindPath {
+			t.Fatalf("path scope was not removed despite reordered paths: %+v", s)
+		}
+	}
+	// The baseline repo scope must remain — only the path scope is removed.
+	if len(found.Scopes) != 1 || found.Scopes[0].Kind != manifest.ScopeKindRepo {
+		t.Fatalf("expected only the baseline repo scope to remain, got %+v", found.Scopes)
+	}
+}
+
 // description-only update (Teams = nil) leaves existing team
 // memberships intact. The CLI's newBotUpdateCommand sets Teams to nil
 // to avoid the read-modify-write race that would clobber concurrent

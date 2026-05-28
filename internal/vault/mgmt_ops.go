@@ -760,7 +760,7 @@ func commonSetAssetInstallation(vaultRoot string, actor mgmt.Actor, assetName st
 		s = manifest.Scope{
 			Kind:  manifest.ScopeKindPath,
 			Repo:  scope.NormalizeRepoURL(target.Repo),
-			Paths: target.Paths,
+			Paths: canonicalPaths(target.Paths),
 		}
 	case InstallKindTeam:
 		if target.Team == "" {
@@ -890,6 +890,18 @@ func commonClearAssetInstallations(vaultRoot string, actor mgmt.Actor, assetName
 	})
 }
 
+// canonicalPaths returns a sorted copy of paths so path-scope rows are
+// stored in a canonical order. Both set and remove route their paths
+// through here, so installScopeMatches / scopeExistsOnAsset (which compare
+// with slices.Equal) treat ["b","a"] and ["a","b"] as the same scope
+// regardless of the order a caller passes. The caller's slice is never
+// mutated.
+func canonicalPaths(paths []string) []string {
+	out := append([]string(nil), paths...)
+	slices.Sort(out)
+	return out
+}
+
 func installTargetScope(target InstallTarget, actor mgmt.Actor) (manifest.Scope, error) {
 	switch target.Kind {
 	case InstallKindOrg:
@@ -903,13 +915,7 @@ func installTargetScope(target InstallTarget, actor mgmt.Actor) (manifest.Scope,
 		if target.Repo == "" || len(target.Paths) == 0 {
 			return manifest.Scope{}, errors.New("path installation requires repo URL and at least one path")
 		}
-		// Sort a copy of the paths so set/remove are order-insensitive:
-		// installScopeMatches compares with slices.Equal, so a caller
-		// removing ["b","a"] must match a row stored as ["a","b"]. We never
-		// mutate the caller's slice.
-		paths := append([]string(nil), target.Paths...)
-		slices.Sort(paths)
-		return manifest.Scope{Kind: manifest.ScopeKindPath, Repo: scope.NormalizeRepoURL(target.Repo), Paths: paths}, nil
+		return manifest.Scope{Kind: manifest.ScopeKindPath, Repo: scope.NormalizeRepoURL(target.Repo), Paths: canonicalPaths(target.Paths)}, nil
 	case InstallKindTeam:
 		if target.Team == "" {
 			return manifest.Scope{}, errors.New("team installation missing team name")
