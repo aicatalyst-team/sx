@@ -112,6 +112,20 @@ sx cloud status        # prints the MCP URL to paste into claude.ai / chatgpt.co
 The relay forwards requests over a WebSocket your machine opens — vault
 content stays local. See [docs/cloud-relay.md](docs/cloud-relay.md).
 
+**Use sx as a Go library** — everything the CLI does to a vault is also a
+package. Publish skills and agents, manage bots and teams, and browse or
+download assets from your own program against Skills.new, Git, or local
+Path vaults through one `Client`:
+
+```go
+import "github.com/sleuth-io/sx/pkg/sxvault"
+
+client, _ := sxvault.OpenSkillsNew("https://app.skills.new", token)
+client.PutSkillZip(ctx, sxvault.SkillZipSpec{Name: "lint-helper", Version: "1.0.0", ZipData: zip})
+```
+
+See [docs/library.md](docs/library.md) for the full API guide.
+
 **Usage analytics & audit**:
 
 ```bash
@@ -265,6 +279,7 @@ See LICENSE file for details.
 - [Profiles](docs/profiles.md) - Multiple configuration profiles
 - [Clients](docs/clients.md) - Client support model and IDE vs CLI limitations
 - [Cloud relay](docs/cloud-relay.md) - Expose your vault to claude.ai and chatgpt.com via skills.new
+- [Library](docs/library.md) - Use sx as a Go library via the `pkg/sxvault` public API
 
 
 ### Prerequisites
