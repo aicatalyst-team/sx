@@ -208,8 +208,8 @@ func TestDeleteBotRemovesBotAndBotScopes(t *testing.T) {
 			t.Fatalf("sx.toml still contains %q after DeleteBot:\n%s", unwanted, manifest)
 		}
 	}
-	if !strings.Contains(manifest, `name = "lint-helper"`) {
-		t.Fatalf("sx.toml lost skill asset after DeleteBot:\n%s", manifest)
+	if strings.Contains(manifest, `name = "lint-helper"`) {
+		t.Fatalf("bot-only skill asset stayed in sx.toml after DeleteBot; this would make it global:\n%s", manifest)
 	}
 	assertFileContains(t, filepath.Join(clone, "assets", "lint-helper", "1", "SKILL.md"), "Lint carefully.")
 }

@@ -584,8 +584,9 @@ func commonDeleteBot(vaultRoot string, actor mgmt.Actor, name string) error {
 		if _, err := findBotForMgmt(m, name); err != nil {
 			return nil, err
 		}
+		assets := m.Assets[:0]
 		for i := range m.Assets {
-			asset := &m.Assets[i]
+			asset := m.Assets[i]
 			kept := asset.Scopes[:0]
 			removed := false
 			for _, s := range asset.Scopes {
@@ -599,7 +600,18 @@ func commonDeleteBot(vaultRoot string, actor mgmt.Actor, name string) error {
 				asset.Scopes = kept
 				clearedAssets = append(clearedAssets, asset.Name)
 			}
+			if removed && len(asset.Scopes) == 0 {
+				// An empty scope list means "global" in the manifest.
+				// If this asset was only installed on the deleted bot,
+				// drop the manifest entry instead of accidentally
+				// promoting it to an org-wide install. The version files
+				// remain on disk for history/audit, but are no longer
+				// resolvable or installed.
+				continue
+			}
+			assets = append(assets, asset)
 		}
+		m.Assets = assets
 		if err := m.DeleteBot(name); err != nil {
 			return nil, err
 		}
