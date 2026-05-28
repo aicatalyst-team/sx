@@ -227,8 +227,10 @@ type SkillZipSpec struct {
 
 // SkillZipResult contains the persisted skill identity after PutSkillZip.
 // Server-backed vaults may normalize spec.Name into a slug; use Name for
-// follow-up install/uninstall calls against the same vault. IsFirstVersion is
-// true when the upload created the first stored version of this skill.
+// follow-up install/uninstall calls against the same vault. Today only the
+// Sleuth vault normalizes the name — for git/path vaults Name is spec.Name
+// unchanged. IsFirstVersion is true when the upload created the first stored
+// version of this skill (Sleuth-only; git/path vaults always report false).
 type SkillZipResult struct {
 	Name           string
 	Version        string
@@ -463,10 +465,9 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 	if err != nil {
 		return AgentResult{}, err
 	}
-	agentName := strings.TrimSpace(upload.Name)
-	if agentName == "" {
-		agentName = spec.AssetName
-	}
+	// upload.Name is already canonical and non-empty (defaultAddAssetResult
+	// fills it from spec.AssetName when the vault didn't provide one).
+	agentName := upload.Name
 	// Mirror PutSkillZip: on a brand-new asset the Sleuth upload applies a
 	// default org-wide install, but an agent is always bot-targeted, so strip
 	// that default before the bot install lands. IsFirstVersion is Sleuth-only
@@ -586,16 +587,12 @@ func (c *Client) PutSkillZipWithResult(ctx context.Context, spec SkillZipSpec) (
 	if err != nil {
 		return SkillZipResult{}, err
 	}
+	// upload.Name / upload.Version are already canonical and non-empty
+	// (defaultAddAssetResult fills them from the spec when the vault didn't).
 	result := SkillZipResult{
-		Name:           strings.TrimSpace(upload.Name),
-		Version:        strings.TrimSpace(upload.Version),
+		Name:           upload.Name,
+		Version:        upload.Version,
 		IsFirstVersion: upload.IsFirstVersion,
-	}
-	if result.Name == "" {
-		result.Name = spec.Name
-	}
-	if result.Version == "" {
-		result.Version = spec.Version
 	}
 	if spec.BotName == "" {
 		return result, nil
@@ -907,13 +904,15 @@ type assetAdderWithResult interface {
 }
 
 func (c *Client) addAssetWithResult(ctx context.Context, ast *lockfile.Asset, zipData []byte) (vault.AddAssetResult, error) {
-	result := vault.AddAssetResult{Name: ast.Name, Version: ast.Version}
+	var result vault.AddAssetResult
 	var err error
 	if adder, ok := c.v.(assetAdderWithResult); ok {
 		result, err = adder.AddAssetWithResult(ctx, ast, zipData)
 	} else {
 		err = c.v.AddAsset(ctx, ast, zipData)
 	}
+	// defaultAddAssetResult trims and fills Name/Version from ast, so every
+	// return path below hands back a non-empty, canonical result.
 	result = defaultAddAssetResult(result, ast)
 	if err != nil {
 		// Re-publishing an existing name@version is intentionally a no-op
@@ -950,12 +949,18 @@ func (c *Client) addAssetWithResult(ctx context.Context, ast *lockfile.Asset, zi
 	return result, nil
 }
 
+// defaultAddAssetResult is the single source of truth for the canonical
+// asset identity: it trims the vault-provided Name/Version and falls back to
+// the requested ast values when the vault left them empty. Callers can rely
+// on the returned Name/Version being non-empty and trimmed.
 func defaultAddAssetResult(result vault.AddAssetResult, ast *lockfile.Asset) vault.AddAssetResult {
-	if strings.TrimSpace(result.Name) == "" {
-		result.Name = ast.Name
+	result.Name = strings.TrimSpace(result.Name)
+	if result.Name == "" {
+		result.Name = strings.TrimSpace(ast.Name)
 	}
-	if strings.TrimSpace(result.Version) == "" {
-		result.Version = ast.Version
+	result.Version = strings.TrimSpace(result.Version)
+	if result.Version == "" {
+		result.Version = strings.TrimSpace(ast.Version)
 	}
 	return result
 }
