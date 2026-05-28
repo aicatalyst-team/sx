@@ -162,6 +162,10 @@ type AgentResult struct {
 	BotKey string
 }
 
+type sleuthAgentAssetCreator interface {
+	CreateAgentAsset(ctx context.Context, name, description, rawContent string) (vault.AddAssetResult, error)
+}
+
 type BotSummary struct {
 	Name            string
 	Slug            string
@@ -459,12 +463,7 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 			return AgentResult{}, err
 		}
 	}
-	zipData, err := agentZip(spec)
-	if err != nil {
-		return AgentResult{}, err
-	}
-	ast := &lockfile.Asset{Name: spec.AssetName, Version: spec.Version, Type: asset.TypeAgent}
-	upload, err := c.addAssetWithResult(ctx, ast, zipData)
+	upload, err := c.putAgentAsset(ctx, spec)
 	if err != nil {
 		return AgentResult{}, err
 	}
@@ -491,6 +490,24 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 		}
 	}
 	return AgentResult{BotKey: botKey}, nil
+}
+
+func (c *Client) putAgentAsset(ctx context.Context, spec AgentSpec) (vault.AddAssetResult, error) {
+	if creator, ok := c.v.(sleuthAgentAssetCreator); ok {
+		if versions, err := c.v.GetVersionList(ctx, spec.AssetName); err == nil && len(versions) > 0 {
+			return vault.AddAssetResult{
+				Name:    spec.AssetName,
+				Version: highestSemver(versions),
+			}, nil
+		}
+		return creator.CreateAgentAsset(ctx, spec.AssetName, agentDescription(spec), agentMarkdown(spec))
+	}
+	zipData, err := agentZip(spec)
+	if err != nil {
+		return vault.AddAssetResult{}, err
+	}
+	ast := &lockfile.Asset{Name: spec.AssetName, Version: spec.Version, Type: asset.TypeAgent}
+	return c.addAssetWithResult(ctx, ast, zipData)
 }
 
 func shouldInstallAgentAssetToBot(v vault.Vault) bool {
@@ -1010,6 +1027,15 @@ func agentZip(spec AgentSpec) ([]byte, error) {
 		return nil, err
 	}
 	return utils.AddFileToZip(zipData, "metadata.toml", metaBytes)
+}
+
+func agentDescription(spec AgentSpec) string {
+	for _, value := range []string{spec.Description, spec.BotDescription, spec.AssetName} {
+		if out := strings.TrimSpace(value); out != "" {
+			return out
+		}
+	}
+	return "Custom agent"
 }
 
 func agentMarkdown(spec AgentSpec) string {

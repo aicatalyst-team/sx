@@ -398,29 +398,19 @@ func TestPutSkillZipWithBotClearsDefaultUploadInstall(t *testing.T) {
 	}
 }
 
-// TestPutAgentClearsDefaultUploadInstallOnFirstVersion verifies PutAgent
-// strips the server's default org-wide install for a brand-new Sleuth agent
-// upload. Skills.new does not expose an agent-to-bot install mutation, so the
-// uploaded agent asset is not routed through installSkillToBot.
-func TestPutAgentClearsDefaultUploadInstallOnFirstVersion(t *testing.T) {
+// TestPutAgentCreatesSleuthAgentViaGraphQL verifies PutAgent uses the
+// Skills.new-native createAsset(rawContent) path for agent assets, then strips
+// the server's default org-wide install. Skills.new does not expose an
+// agent-to-bot install mutation, so the created agent asset is not routed
+// through installSkillToBot.
+func TestPutAgentCreatesSleuthAgentViaGraphQL(t *testing.T) {
 	ctx := context.Background()
 	var clearedAsset string
 	var ops []string
-	var srv *httptest.Server
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/skills/assets":
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"success": true,
-				"asset": map[string]any{
-					"name":             "my-agent_agent",
-					"version":          "1",
-					"url":              srv.URL + "/api/skills/assets/my-agent_agent/1/archive.zip",
-					"is_first_version": true,
-				},
-			})
+		case "/api/skills/assets/my-agent/list.txt":
+			http.NotFound(w, r)
 		case "/graphql":
 			var req struct {
 				OperationName string         `json:"operationName"`
@@ -458,7 +448,7 @@ func TestPutAgentClearsDefaultUploadInstallOnFirstVersion(t *testing.T) {
 	if clearedAsset != "my-agent_agent" {
 		t.Fatalf("ClearAssetInstallations asset = %q, want server slug my-agent_agent", clearedAsset)
 	}
-	wantOps := "ListBots,ListBots,BotInstalled,RemoveAssetInstallations"
+	wantOps := "ListBots,CreateAgentAsset,ListBots,BotInstalled,RemoveAssetInstallations"
 	if gotOps := strings.Join(ops, ","); gotOps != wantOps {
 		t.Fatalf("GraphQL ops = %s, want %s", gotOps, wantOps)
 	}
@@ -485,6 +475,20 @@ func sxvaultAgentGraphQLResponse(t *testing.T, operation string, vars map[string
 	case "RemoveAssetInstallations":
 		return map[string]any{
 			"removeAssetInstallations": map[string]any{"success": true, "errors": []any{}},
+		}
+	case "CreateAgentAsset":
+		return map[string]any{
+			"createAsset": map[string]any{
+				"asset": map[string]any{
+					"__typename":    "Agent",
+					"id":            "agent-1",
+					"name":          "My Agent",
+					"slug":          "my-agent_agent",
+					"type":          "AGENT",
+					"latestVersion": "1",
+				},
+				"errors": []any{},
+			},
 		}
 	case "AssetGID":
 		return map[string]any{

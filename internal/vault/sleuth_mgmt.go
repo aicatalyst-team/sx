@@ -942,6 +942,48 @@ func (s *SleuthVault) DeleteBotApiKey(ctx context.Context, botName, keyID string
 	return nil
 }
 
+func (s *SleuthVault) CreateAgentAsset(ctx context.Context, name, description, rawContent string) (AddAssetResult, error) {
+	name = strings.TrimSpace(name)
+	rawContent = strings.TrimSpace(rawContent)
+	if name == "" || rawContent == "" {
+		return AddAssetResult{}, errors.New("agent name and raw content are required")
+	}
+	input := vaultgql.CreateAssetInput{
+		Name:       name,
+		AssetType:  "agent",
+		RawContent: &rawContent,
+	}
+	if description = strings.TrimSpace(description); description != "" {
+		input.Description = &description
+	}
+	resp, err := vaultgql.CreateAgentAsset(ctx, s.gqlClient(), input)
+	if err != nil {
+		return AddAssetResult{}, err
+	}
+	if resp.CreateAsset == nil {
+		return AddAssetResult{}, errors.New("missing createAsset payload in response")
+	}
+	if err := gqlMutationErrors(resp.CreateAsset.Errors); err != nil {
+		return AddAssetResult{}, err
+	}
+	if resp.CreateAsset.Asset == nil {
+		return AddAssetResult{}, errors.New("createAsset returned no asset")
+	}
+	asset := *resp.CreateAsset.Asset
+	result := AddAssetResult{
+		Name:           strings.TrimSpace(asset.GetSlug()),
+		Version:        strings.TrimSpace(asset.GetLatestVersion()),
+		IsFirstVersion: true,
+	}
+	if result.Name == "" {
+		result.Name = name
+	}
+	if result.Version == "" {
+		result.Version = "1"
+	}
+	return result, nil
+}
+
 func (s *SleuthVault) ClearAssetInstallations(ctx context.Context, assetName string) error {
 	// Two-step clear: removeAssetInstallations handles repo/team/user/
 	// org scopes but does NOT touch bot installs (those live in a
