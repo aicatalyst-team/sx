@@ -120,8 +120,16 @@ Path vaults through one `Client`:
 ```go
 import "github.com/sleuth-io/sx/pkg/sxvault"
 
-client, _ := sxvault.OpenSkillsNew("https://app.skills.new", token)
-client.PutSkillZip(ctx, sxvault.SkillZipSpec{Name: "lint-helper", Version: "1.0.0", ZipData: zip})
+ctx := context.Background()
+client, err := sxvault.OpenSkillsNew("https://app.skills.new", token)
+if err != nil {
+    log.Fatal(err)
+}
+if err := client.PutSkillZip(ctx, sxvault.SkillZipSpec{
+    Name: "lint-helper", Version: "1.0.0", ZipData: zip,
+}); err != nil {
+    log.Fatal(err)
+}
 ```
 
 See [docs/library.md](docs/library.md) for the full API guide.

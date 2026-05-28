@@ -314,6 +314,92 @@ func TestPathVault_PathInstall_OrderInsensitive(t *testing.T) {
 	}
 }
 
+// TestPathVault_PathInstall_LegacyUnsortedRow verifies a path scope stored
+// in unsorted order — as an older sx version or a hand edit of sx.toml
+// would leave it — is still matched on both set (no duplicate appended) and
+// remove. This exercises the comparison-site canonicalization rather than
+// the in-version round trip.
+func TestPathVault_PathInstall_LegacyUnsortedRow(t *testing.T) {
+	mgmt.ResetActorCache()
+	dir := t.TempDir()
+
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "alice@example.com")
+	runGit(t, dir, "config", "user.name", "Alice")
+
+	repo := "github.com/acme/infra"
+	if err := manifest.Save(dir, &manifest.Manifest{
+		SchemaVersion: manifest.CurrentSchemaVersion,
+		Assets: []manifest.Asset{
+			{
+				Name:       "my-skill",
+				Version:    "1.0.0",
+				Type:       asset.TypeSkill,
+				SourceHTTP: &manifest.SourceHTTP{URL: "https://example.com/my-skill.zip"},
+				// A path scope stored in unsorted order, as a legacy/hand
+				// edit would leave it, plus a baseline so the row survives.
+				Scopes: []manifest.Scope{
+					{Kind: manifest.ScopeKindRepo, Repo: "github.com/acme/baseline"},
+					{Kind: manifest.ScopeKindPath, Repo: repo, Paths: []string{"docs", "api"}},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed manifest: %v", err)
+	}
+	v, err := NewPathVault("file://" + dir)
+	if err != nil {
+		t.Fatalf("NewPathVault: %v", err)
+	}
+	ctx := context.Background()
+
+	// Set with the same paths sorted differently must NOT append a second
+	// row — the legacy unsorted row should be recognized as already present.
+	if err := v.SetAssetInstallation(ctx, "my-skill", InstallTarget{
+		Kind:  InstallKindPath,
+		Repo:  repo,
+		Paths: []string{"api", "docs"},
+	}); err != nil {
+		t.Fatalf("SetAssetInstallation: %v", err)
+	}
+	m, _, err := manifest.LoadOrMigrate(dir)
+	if err != nil {
+		t.Fatalf("reload manifest after set: %v", err)
+	}
+	if pathScopes := countPathScopes(m.FindAsset("my-skill")); pathScopes != 1 {
+		t.Fatalf("expected the legacy row to be deduped (1 path scope), got %d", pathScopes)
+	}
+
+	// Remove with yet another order must match the legacy row and drop it.
+	if err := v.RemoveAssetInstallation(ctx, "my-skill", InstallTarget{
+		Kind:  InstallKindPath,
+		Repo:  repo,
+		Paths: []string{"api", "docs"},
+	}); err != nil {
+		t.Fatalf("RemoveAssetInstallation: %v", err)
+	}
+	m, _, err = manifest.LoadOrMigrate(dir)
+	if err != nil {
+		t.Fatalf("reload manifest after remove: %v", err)
+	}
+	if pathScopes := countPathScopes(m.FindAsset("my-skill")); pathScopes != 0 {
+		t.Fatalf("legacy unsorted path scope was not removed, %d remain", pathScopes)
+	}
+}
+
+func countPathScopes(a *manifest.Asset) int {
+	if a == nil {
+		return 0
+	}
+	n := 0
+	for _, s := range a.Scopes {
+		if s.Kind == manifest.ScopeKindPath {
+			n++
+		}
+	}
+	return n
+}
+
 // TestPathVault_BotUpdate_PreservesTeams pins the contract that a
 // description-only update (Teams = nil) leaves existing team
 // memberships intact. The CLI's newBotUpdateCommand sets Teams to nil

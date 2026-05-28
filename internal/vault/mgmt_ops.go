@@ -504,16 +504,15 @@ func directBotSkillNameSet(m *manifest.Manifest, botName string) map[string]stru
 		if a.Type.Key != asset.TypeSkill.Key {
 			continue
 		}
+		name := strings.TrimSpace(a.Name)
+		if name == "" {
+			continue
+		}
 		for _, s := range a.Scopes {
-			if s.Kind != manifest.ScopeKindBot || s.Bot != botName {
-				continue
-			}
-			name := strings.TrimSpace(a.Name)
-			if name == "" {
+			if s.Kind == manifest.ScopeKindBot && s.Bot == botName {
+				out[name] = struct{}{}
 				break
 			}
-			out[name] = struct{}{}
-			break
 		}
 	}
 	return out
@@ -891,11 +890,12 @@ func commonClearAssetInstallations(vaultRoot string, actor mgmt.Actor, assetName
 }
 
 // canonicalPaths returns a sorted copy of paths so path-scope rows are
-// stored in a canonical order. Both set and remove route their paths
-// through here, so installScopeMatches / scopeExistsOnAsset (which compare
-// with slices.Equal) treat ["b","a"] and ["a","b"] as the same scope
-// regardless of the order a caller passes. The caller's slice is never
-// mutated.
+// stored and compared in a canonical order. Set and remove route their
+// paths through here on the way in, and installScopeMatches /
+// scopeExistsOnAsset canonicalize both sides at comparison time — so a row
+// hand-edited in sx.toml or written by an older sx version in unsorted
+// order still matches regardless of the order a caller passes. The
+// caller's slice is never mutated.
 func canonicalPaths(paths []string) []string {
 	out := append([]string(nil), paths...)
 	slices.Sort(out)
@@ -949,7 +949,7 @@ func installScopeMatches(scopeRow, needle manifest.Scope) bool {
 	case manifest.ScopeKindRepo:
 		return scope.NormalizeRepoURL(scopeRow.Repo) == scope.NormalizeRepoURL(needle.Repo)
 	case manifest.ScopeKindPath:
-		return scope.NormalizeRepoURL(scopeRow.Repo) == scope.NormalizeRepoURL(needle.Repo) && slices.Equal(scopeRow.Paths, needle.Paths)
+		return scope.NormalizeRepoURL(scopeRow.Repo) == scope.NormalizeRepoURL(needle.Repo) && slices.Equal(canonicalPaths(scopeRow.Paths), canonicalPaths(needle.Paths))
 	case manifest.ScopeKindTeam:
 		return scopeRow.Team == needle.Team
 	case manifest.ScopeKindUser:
@@ -992,7 +992,7 @@ func scopeExistsOnAsset(scopes []manifest.Scope, needle manifest.Scope) bool {
 				return true
 			}
 		case manifest.ScopeKindPath:
-			if scope.NormalizeRepoURL(s.Repo) == needleRepo && slices.Equal(s.Paths, needle.Paths) {
+			if scope.NormalizeRepoURL(s.Repo) == needleRepo && slices.Equal(canonicalPaths(s.Paths), canonicalPaths(needle.Paths)) {
 				return true
 			}
 		case manifest.ScopeKindTeam:

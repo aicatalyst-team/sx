@@ -158,7 +158,11 @@ type Vault interface {
 	RemoveAssetInstallation(ctx context.Context, assetName string, target InstallTarget) error
 
 	// ClearAssetInstallations removes every installation target from an
-	// asset. Soft no-op if the asset is absent from the vault.
+	// asset. Soft no-op if the asset is absent from the vault. Unlike
+	// RemoveAssetInstallation — which drops the manifest entry when it
+	// removes the asset's last scope — Clear keeps the (now scope-less)
+	// entry in place, so a later install adds a scope to the existing
+	// entry rather than recreating it.
 	ClearAssetInstallations(ctx context.Context, assetName string) error
 
 	// RecordUsageEvents appends usage events to the vault's persistent
