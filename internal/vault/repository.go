@@ -25,6 +25,11 @@ var ErrNotImplemented = errors.New("operation not supported for this vault type"
 type ErrVersionExists struct {
 	Name    string
 	Version string
+	// Slug is the server-persisted slug of the conflicting asset, when the
+	// backend reports it. Empty when unknown. Callers re-publishing a
+	// collision-resolved upload should prefer this over the requested Name
+	// so follow-up operations target the uploaded asset, not a same-named one.
+	Slug    string
 	Message string
 }
 

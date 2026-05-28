@@ -398,6 +398,114 @@ func TestPutSkillZipWithBotClearsDefaultUploadInstall(t *testing.T) {
 	}
 }
 
+// TestPutSkillZipRepublishRoutesBotInstallToServerSlug pins the fix for the
+// re-publish case: when the upload conflicts (version already exists) the
+// server returns no fresh asset result, but if the conflict response carries
+// the persisted slug the bot install must route to that slug — not the
+// requested name, which could collide with a different same-named asset.
+func TestPutSkillZipRepublishRoutesBotInstallToServerSlug(t *testing.T) {
+	ctx := context.Background()
+	var assetGIDSearch string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/skills/assets":
+			// Version already exists — return the conflict plus the
+			// server-persisted slug for the asset.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": false,
+				"error":   "asset version already exists",
+				"asset": map[string]any{
+					"name":    "foo_skill",
+					"version": "1",
+				},
+			})
+		case "/graphql":
+			var req struct {
+				OperationName string         `json:"operationName"`
+				Variables     map[string]any `json:"variables"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if req.OperationName == "AssetGID" {
+				assetGIDSearch, _ = req.Variables["search"].(string)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": sxvaultRepublishGraphQLResponse(t, req.OperationName, req.Variables)})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := OpenSkillsNew(srv.URL, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.PutSkillZipWithResult(ctx, SkillZipSpec{
+		Name:    "foo",
+		Version: "1",
+		BotName: "testers",
+		ZipData: skillZip(t, "Foo skill."),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "foo_skill" {
+		t.Fatalf("republish result Name = %q, want server slug foo_skill", got.Name)
+	}
+	if assetGIDSearch != "foo_skill" {
+		t.Fatalf("bot install resolved %q, want the server slug foo_skill", assetGIDSearch)
+	}
+}
+
+func sxvaultRepublishGraphQLResponse(t *testing.T, operation string, vars map[string]any) any {
+	t.Helper()
+	switch operation {
+	case "ListBots":
+		return map[string]any{
+			"bots": []any{
+				map[string]any{
+					"id":              "bot-1",
+					"name":            "testers",
+					"slug":            "testers",
+					"description":     "Tests stuff",
+					"teams":           []any{},
+					"installedSkills": []any{},
+				},
+			},
+		}
+	case "AssetGID":
+		return map[string]any{
+			"vault": map[string]any{
+				"assets": map[string]any{
+					"nodes": []any{
+						map[string]any{
+							"__typename": "Skill",
+							"id":         "skill-foo",
+							"name":       "Foo",
+							"slug":       "foo_skill",
+						},
+					},
+				},
+			},
+		}
+	case "InstallSkillToBot":
+		return map[string]any{
+			"installSkillToBot": map[string]any{
+				"success": true,
+				"errors":  []any{},
+			},
+		}
+	default:
+		t.Fatalf("unexpected GraphQL operation %q", operation)
+		return nil
+	}
+}
+
 func sxvaultTestGraphQLResponse(t *testing.T, operation string, vars map[string]any) any {
 	t.Helper()
 	switch operation {

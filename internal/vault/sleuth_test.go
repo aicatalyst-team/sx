@@ -601,6 +601,60 @@ func TestSleuthVault_InstallSkillToBot_PrefersSlugOverName(t *testing.T) {
 	}
 }
 
+// TestSleuthVault_InstallSkillToBot_AmbiguousNameErrors covers the case
+// where no asset matches the requested value as a slug but two distinct
+// assets share it as a display name. The resolver must surface an
+// ambiguity error rather than silently installing the first one.
+func TestSleuthVault_InstallSkillToBot_AmbiguousNameErrors(t *testing.T) {
+	srv, _ := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"ListBots": func(vars map[string]any) any {
+			return map[string]any{
+				"bots": []any{
+					map[string]any{
+						"id":          "bot-1",
+						"name":        "testers",
+						"slug":        "testers",
+						"description": "Tests stuff",
+						"teams":       []any{},
+					},
+				},
+			}
+		},
+		"AssetGID": func(vars map[string]any) any {
+			return map[string]any{
+				"vault": map[string]any{
+					"assets": map[string]any{
+						"nodes": []any{
+							map[string]any{
+								"__typename": "Skill",
+								"id":         "asset-a",
+								"name":       "fix-pr",
+								"slug":       "fix-pr-one",
+							},
+							map[string]any{
+								"__typename": "Skill",
+								"id":         "asset-b",
+								"name":       "fix-pr",
+								"slug":       "fix-pr-two",
+							},
+						},
+					},
+				},
+			}
+		},
+		"InstallSkillToBot": func(vars map[string]any) any {
+			t.Fatal("InstallSkillToBot should not be called on an ambiguous name")
+			return nil
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	err := v.SetAssetInstallation(context.Background(), "fix-pr", InstallTarget{Kind: InstallKindBot, Bot: "testers"})
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("SetAssetInstallation with ambiguous name = %v, want ambiguity error", err)
+	}
+}
+
 // TestSleuthVault_SetInstallations_OmitsEmptyVersion verifies that the
 // SetAssetInstallations mutation omits assetVersion when asset.Version is
 // "" (the optional field must not be sent as the empty string). Also

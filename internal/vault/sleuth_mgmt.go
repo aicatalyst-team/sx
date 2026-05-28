@@ -626,27 +626,52 @@ func (s *SleuthVault) assetGIDByName(ctx context.Context, name string) (string, 
 	// (Skill, MCP, Agent, ClaudeCodePlugin, ...). Use the interface
 	// getters to avoid switching on every variant.
 	name = strings.TrimSpace(name)
-	var slugMatch, nameMatch *assetIDMatch
+	var slugMatch *assetIDMatch
+	var nameMatches []assetIDMatch
 	for _, n := range resp.Vault.Assets.Nodes {
 		if n.GetSlug() == name && slugMatch == nil {
 			slugMatch = &assetIDMatch{id: n.GetId(), slug: n.GetSlug()}
 		}
-		if n.GetName() == name && n.GetSlug() != name && nameMatch == nil {
-			nameMatch = &assetIDMatch{id: n.GetId(), slug: n.GetSlug()}
+		if n.GetName() == name && n.GetSlug() != name {
+			nameMatches = appendDistinctAssetMatch(nameMatches, assetIDMatch{id: n.GetId(), slug: n.GetSlug()})
 		}
 	}
+	// An exact slug match is unambiguous — slugs are unique and are what
+	// ListAssets / upload responses hand back — so it always wins.
 	if slugMatch != nil {
 		return slugMatch.id, nil
 	}
-	if nameMatch != nil {
-		return nameMatch.id, nil
+	switch len(nameMatches) {
+	case 0:
+		return "", fmt.Errorf("asset %q not found", name)
+	case 1:
+		return nameMatches[0].id, nil
+	default:
+		// Several distinct assets share this display name and none matched
+		// it as a slug. Surface the ambiguity (with the candidate slugs)
+		// rather than silently installing whichever the server listed first.
+		slugs := make([]string, 0, len(nameMatches))
+		for _, m := range nameMatches {
+			slugs = append(slugs, m.slug)
+		}
+		return "", fmt.Errorf("asset name %q is ambiguous; multiple assets share it (slugs: %s) — install by slug instead", name, strings.Join(slugs, ", "))
 	}
-	return "", fmt.Errorf("asset %q not found", name)
 }
 
 type assetIDMatch struct {
 	id   string
 	slug string
+}
+
+// appendDistinctAssetMatch appends m unless an entry with the same id is
+// already present, so a duplicated search node doesn't read as ambiguity.
+func appendDistinctAssetMatch(matches []assetIDMatch, m assetIDMatch) []assetIDMatch {
+	for _, existing := range matches {
+		if existing.id == m.id {
+			return matches
+		}
+	}
+	return append(matches, m)
 }
 
 // installSkillToBot installs an asset directly to a bot via the existing

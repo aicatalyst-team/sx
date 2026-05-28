@@ -585,6 +585,11 @@ func (c *Client) PutSkillZipWithResult(ctx context.Context, spec SkillZipSpec) (
 	if spec.BotName == "" {
 		return result, nil
 	}
+	// IsFirstVersion is only ever set by the Sleuth HTTP upload response;
+	// git/local vaults go through AddAsset and leave it false, so this clear
+	// is Sleuth-only by design. It strips the server's default org-wide
+	// install on a brand-new asset so a bot-targeted publish lands only on
+	// the bot, not everyone. Non-Sleuth vaults have no such default to clear.
 	if upload.IsFirstVersion {
 		if err := c.v.ClearAssetInstallations(ctx, result.Name); err != nil {
 			return SkillZipResult{}, fmt.Errorf("sxvault: clearing default installations for %q: %w", result.Name, err)
@@ -907,6 +912,14 @@ func (c *Client) addAssetWithResult(ctx context.Context, ast *lockfile.Asset, zi
 		var exists *vault.ErrVersionExists
 		if !errors.As(err, &exists) {
 			return vault.AddAssetResult{}, err
+		}
+		// On a version conflict the server returns no AddAssetResult, so
+		// result still carries the spec defaults (the requested Name). If
+		// the conflict response reported the persisted slug, prefer it so a
+		// re-publish of a collision-resolved upload routes the bot install
+		// to the uploaded asset, not a different one sharing the name.
+		if slug := strings.TrimSpace(exists.Slug); slug != "" {
+			result.Name = slug
 		}
 		if err := c.v.InheritInstallations(ctx, ast); err != nil {
 			return vault.AddAssetResult{}, err

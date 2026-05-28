@@ -268,6 +268,11 @@ func (s *SleuthVault) AddAssetWithResult(ctx context.Context, asset *lockfile.As
 				return AddAssetResult{}, &ErrVersionExists{
 					Name:    asset.Name,
 					Version: asset.Version,
+					// Server-persisted slug, when the conflict response
+					// carries it — lets a re-publish route follow-up
+					// operations to the uploaded asset rather than a
+					// different one sharing the requested name.
+					Slug:    uploadResp.Asset.Name,
 					Message: uploadResp.Error,
 				}
 			}
