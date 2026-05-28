@@ -430,6 +430,55 @@ func TestPathVault_RemoveOrgInstall_Rejected(t *testing.T) {
 	}
 }
 
+// TestPathVault_RemoveTeamInstall_RequiresAdminEvenOnNoOp pins the
+// documented contract that the team-admin precondition in
+// RemoveAssetInstallation runs unconditionally — before the scope walk
+// decides nothing changed. A non-admin removing a team install that
+// doesn't even exist still gets the admin error, not a silent no-op.
+func TestPathVault_RemoveTeamInstall_RequiresAdminEvenOnNoOp(t *testing.T) {
+	mgmt.ResetActorCache()
+	dir := t.TempDir()
+
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "alice@example.com")
+	runGit(t, dir, "config", "user.name", "Alice")
+
+	if err := manifest.Save(dir, &manifest.Manifest{
+		SchemaVersion: manifest.CurrentSchemaVersion,
+		Assets: []manifest.Asset{
+			{
+				Name:       "my-skill",
+				Version:    "1.0.0",
+				Type:       asset.TypeSkill,
+				SourceHTTP: &manifest.SourceHTTP{URL: "https://example.com/my-skill.zip"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed manifest: %v", err)
+	}
+	v, err := NewPathVault("file://" + dir)
+	if err != nil {
+		t.Fatalf("NewPathVault: %v", err)
+	}
+	ctx := context.Background()
+
+	// Team whose only admin is bob — the caller (alice) is not an admin.
+	if err := v.CreateTeam(ctx, mgmt.Team{
+		Name:    "platform",
+		Members: []string{"bob@example.com"},
+		Admins:  []string{"bob@example.com"},
+	}); err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+
+	// my-skill has no team install, so the scope walk would no-op — but the
+	// admin check must still fire first and reject the non-admin caller.
+	err = v.RemoveAssetInstallation(ctx, "my-skill", InstallTarget{Kind: InstallKindTeam, Team: "platform"})
+	if err == nil || !strings.Contains(err.Error(), "not an admin") {
+		t.Fatalf("RemoveAssetInstallation by non-admin = %v, want team-admin error", err)
+	}
+}
+
 func countPathScopes(a *manifest.Asset) int {
 	if a == nil {
 		return 0

@@ -292,6 +292,13 @@ type SourceHandler interface {
 }
 
 // ListAssetsOptions contains options for listing vault assets
+// DefaultTeamsLimit is the server-side maximum number of teams a single
+// ListTeams query returns. It is the one source of truth for that cap: the
+// Sleuth lookup paths request it, and the pkg/sxvault facade references it
+// so the public "list all teams" surface and the internal lookups can't
+// silently disagree.
+const DefaultTeamsLimit = 300
+
 // ListTeamsOptions controls the ListTeams query.
 type ListTeamsOptions struct {
 	Filter string // Server-side term search (substring match on team name)

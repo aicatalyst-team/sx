@@ -601,11 +601,11 @@ func (c *Client) DeleteBot(ctx context.Context, botName string) error {
 	return c.v.DeleteBot(c.actorContext(ctx), botName)
 }
 
-// defaultTeamsLimit is the page size ListTeams requests. It matches the
-// Sleuth backend's server-side maximum (internal/vault.sleuthTeamLookupPageSize),
-// so a single call returns every team up to that ceiling. ListTeams surfaces
-// an error rather than silently truncating when a vault exceeds it.
-const defaultTeamsLimit = 300
+// defaultTeamsLimit is the page size ListTeams requests. It aliases the
+// vault package's canonical server-side maximum so the public "list all
+// teams" surface and the internal lookups share one value. ListTeams
+// surfaces an error rather than silently truncating when a vault exceeds it.
+const defaultTeamsLimit = vault.DefaultTeamsLimit
 
 func (c *Client) ListTeams(ctx context.Context) ([]TeamSummary, error) {
 	if c == nil || c.v == nil {

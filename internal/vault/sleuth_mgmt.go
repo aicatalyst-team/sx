@@ -67,10 +67,8 @@ const sleuthMemberPageSize = 50
 // listTeamNodes fetches raw team nodes for internal lookups (teamGIDByName,
 // resolveTeamGIDs). Uses a high limit since these need to search the full list.
 func (s *SleuthVault) listTeamNodes(ctx context.Context) ([]sleuthTeamNode, error) {
-	return s.listTeamNodesFiltered(ctx, nil, sleuthTeamLookupPageSize)
+	return s.listTeamNodesFiltered(ctx, nil, DefaultTeamsLimit)
 }
-
-const sleuthTeamLookupPageSize = 300
 
 func (s *SleuthVault) listTeamNodesFiltered(ctx context.Context, term *string, first int) ([]sleuthTeamNode, error) {
 	resp, err := vaultgql.ListTeams(ctx, s.gqlClient(), first, term, sleuthMemberPageSize)
@@ -110,7 +108,7 @@ func gqlTeamNodeToSleuthNode(n vaultgql.ListTeamsOrganizationOrganizationTypeTea
 }
 
 func (s *SleuthVault) GetTeam(ctx context.Context, name string) (*mgmt.Team, error) {
-	result, err := s.ListTeams(ctx, ListTeamsOptions{Filter: name, Limit: sleuthTeamLookupPageSize})
+	result, err := s.ListTeams(ctx, ListTeamsOptions{Filter: name, Limit: DefaultTeamsLimit})
 	if err != nil {
 		return nil, err
 	}

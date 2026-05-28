@@ -956,7 +956,12 @@ func installScopeMatches(scopeRow, needle manifest.Scope) bool {
 	}
 	switch scopeRow.Kind {
 	case manifest.ScopeKindOrg:
-		return true
+		// Unreachable in practice: an org install is stored as an empty
+		// scope list, never an org scope row, and installTargetScope rejects
+		// InstallKindOrg up front — so an org needle never reaches here. Kept
+		// only for switch exhaustiveness; returns false rather than implying
+		// org scopes are a meaningful thing to match.
+		return false
 	case manifest.ScopeKindRepo:
 		return scope.NormalizeRepoURL(scopeRow.Repo) == scope.NormalizeRepoURL(needle.Repo)
 	case manifest.ScopeKindPath:
