@@ -159,7 +159,10 @@ type Vault interface {
 	// ErrNotImplemented (file-backed vaults support all kinds). Removing an
 	// InstallKindOrg target is not supported on any backend (an org-wide
 	// install has no scope row to remove) and returns ErrNotImplemented —
-	// use ClearAssetInstallations to undo a global install.
+	// use ClearAssetInstallations to undo a global install. For bot and
+	// team targets the bot-exists / team-admin precondition is checked
+	// unconditionally, before the scope walk — so even a no-op removal of
+	// an already-absent row requires the caller to still hold those rights.
 	RemoveAssetInstallation(ctx context.Context, assetName string, target InstallTarget) error
 
 	// ClearAssetInstallations removes every installation target from an

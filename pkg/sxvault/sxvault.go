@@ -8,10 +8,11 @@
 // and exposes only the asset type, description, and raw zip bytes through
 // AssetZip. The raw GetMetadata / GetAssetByVersion interfaces, along with
 // the broad mutators the internal vault.Vault supports — RemoveAsset,
-// RenameAsset, broad asset-uninstall — remain internal and are NOT
-// re-exported yet, reserved for a follow-up release once consumer needs
-// are clearer. Library consumers needing them today should treat the
-// absence as a "not yet" rather than a "never."
+// RenameAsset, and asset-uninstall across kinds beyond bot — remain
+// internal and are NOT re-exported yet (UninstallAssetFromBot is the
+// narrow, bot-only public uninstall form), reserved for a follow-up
+// release once consumer needs are clearer. Library consumers needing them
+// today should treat the absence as a "not yet" rather than a "never."
 package sxvault
 
 import (
@@ -201,6 +202,13 @@ type BotRuntimeTokenResult struct {
 // underlying vault does not implement runtime tokens (i.e., any non-skills.new
 // backend). Callers should match with errors.Is to detect this case.
 var ErrBotRuntimeTokensUnsupported = errors.New("sxvault: bot runtime tokens are only supported by skills.new vaults")
+
+// ErrBotNotFound is reported (via errors.Is) when a method that resolves a
+// bot by name — EnsureBot's update path, PutSkillZip's bot pre-check,
+// UninstallAssetFromBot — is given a bot the vault doesn't have. It
+// re-exports the internal sentinel so library consumers can branch on
+// "bot doesn't exist" without string-matching the error message.
+var ErrBotNotFound = mgmt.ErrBotNotFound
 
 type SkillZipSpec struct {
 	Name    string
@@ -808,6 +816,9 @@ func (c *Client) GetAssetZip(ctx context.Context, name, version string) (AssetZi
 	meta, err := c.v.GetMetadata(ctx, name, version)
 	if err != nil {
 		return AssetZip{}, fmt.Errorf("sxvault: reading metadata for %q@%s: %w", name, version, err)
+	}
+	if meta == nil {
+		return AssetZip{}, fmt.Errorf("sxvault: metadata for %q@%s was nil", name, version)
 	}
 	data, err := c.v.GetAssetByVersion(ctx, name, version)
 	if err != nil {
