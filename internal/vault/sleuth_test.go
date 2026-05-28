@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -262,6 +263,9 @@ func TestSleuthVault_RevokeBotRuntimeTokens_QueryShape(t *testing.T) {
 }
 
 func TestSleuthVault_ListBots_ProjectsSlug(t *testing.T) {
+	// Server returns installedSkills in non-alphabetical order with a
+	// duplicate to verify the Sleuth path dedupes and sorts (matching the
+	// file-based path's contract on mgmt.Bot.InstalledSkills).
 	srv, _ := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
 		"ListBots": func(vars map[string]any) any {
 			return map[string]any{
@@ -273,8 +277,9 @@ func TestSleuthVault_ListBots_ProjectsSlug(t *testing.T) {
 						"description": "Reviews pull requests.",
 						"teams":       []any{},
 						"installedSkills": []any{
-							map[string]any{"name": "fix-pr"},
 							map[string]any{"name": "webapp-testing"},
+							map[string]any{"name": "fix-pr"},
+							map[string]any{"name": "fix-pr"},
 						},
 					},
 				},
@@ -293,8 +298,9 @@ func TestSleuthVault_ListBots_ProjectsSlug(t *testing.T) {
 	if bots[0].Slug != "reviewer" {
 		t.Fatalf("bots[0].Slug = %q, want reviewer", bots[0].Slug)
 	}
-	if got, want := strings.Join(bots[0].InstalledSkills, ","), "fix-pr,webapp-testing"; got != want {
-		t.Fatalf("bots[0].InstalledSkills = %q, want %q", got, want)
+	want := []string{"fix-pr", "webapp-testing"}
+	if !slices.Equal(bots[0].InstalledSkills, want) {
+		t.Fatalf("bots[0].InstalledSkills = %v, want %v (sorted, deduped)", bots[0].InstalledSkills, want)
 	}
 }
 

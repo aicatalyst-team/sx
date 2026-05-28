@@ -35,10 +35,13 @@ var ErrEmptyBotName = errors.New("bot name cannot be empty")
 // Sleuth vaults issue real OAuth API keys via createBotApiKey; that
 // capability is exposed only on the BotApiKeyManager interface.
 type Bot struct {
-	Name            string
-	Slug            string
-	Description     string
-	Teams           []string
+	Name        string
+	Slug        string
+	Description string
+	Teams       []string
+	// InstalledSkills is the bot's resolved skill set (direct + team
+	// + org-wide installs), deduplicated and sorted. Vault implementations
+	// must present the same shape so callers don't branch on vault type.
 	InstalledSkills []string
 }
 

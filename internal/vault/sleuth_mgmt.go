@@ -354,12 +354,24 @@ func (s *SleuthVault) listBotNodes(ctx context.Context) ([]sleuthBotNode, error)
 		for j, t := range b.Teams {
 			teams[j] = t.Name
 		}
+		// Mirror the file-based path (resolvedBotSkillNames): dedupe and
+		// sort so mgmt.Bot.InstalledSkills has identical semantics across
+		// vault types. The server has no documented ordering or
+		// dedup guarantee on installedSkills.
+		seen := make(map[string]struct{}, len(b.InstalledSkills))
 		installedSkills := make([]string, 0, len(b.InstalledSkills))
 		for _, skill := range b.InstalledSkills {
-			if name := strings.TrimSpace(skill.Name); name != "" {
-				installedSkills = append(installedSkills, name)
+			name := strings.TrimSpace(skill.Name)
+			if name == "" {
+				continue
 			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			installedSkills = append(installedSkills, name)
 		}
+		slices.Sort(installedSkills)
 		nodes[i] = sleuthBotNode{
 			ID:              b.Id,
 			Name:            b.Name,
