@@ -206,6 +206,12 @@ func (p *PathVault) SetAssetInstallation(ctx context.Context, assetName string, 
 	})
 }
 
+func (p *PathVault) RemoveAssetInstallation(ctx context.Context, assetName string, target InstallTarget) error {
+	return p.withLock(ctx, func(actor mgmt.Actor) error {
+		return commonRemoveAssetInstallation(p.repoPath, actor, assetName, target)
+	})
+}
+
 func (p *PathVault) ClearAssetInstallations(ctx context.Context, assetName string) error {
 	return p.withLock(ctx, func(actor mgmt.Actor) error {
 		return commonClearAssetInstallations(p.repoPath, actor, assetName)

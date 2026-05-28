@@ -5,7 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/sleuth-io/sx/internal/git"
+	"github.com/sleuth-io/sx/internal/mgmt"
 )
 
 func TestGitPutAgentWritesSXVaultFormat(t *testing.T) {
@@ -42,6 +47,24 @@ func TestGitPutAgentWritesSXVaultFormat(t *testing.T) {
 			t.Fatalf("sx.toml missing %q:\n%s", want, manifest)
 		}
 	}
+}
+
+func hasBotSkill(skills []BotSkillSummary, name string) bool {
+	for _, skill := range skills {
+		if skill.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDirectBotSkill(skills []BotSkillSummary, name string) bool {
+	for _, skill := range skills {
+		if skill.Name == name && skill.IsDirectInstall {
+			return true
+		}
+	}
+	return false
 }
 
 func TestAgentMarkdownPreservesExistingFrontmatter(t *testing.T) {
@@ -332,7 +355,7 @@ func TestPutSkillZipWithAndWithoutBotInstall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bots) != 1 || !slices.Contains(bots[0].InstalledSkills, "test-helper") {
+	if len(bots) != 1 || !hasBotSkill(bots[0].InstalledSkills, "test-helper") {
 		t.Fatalf("ListBots returned installed skills %+v, want test-helper", bots)
 	}
 
@@ -348,6 +371,148 @@ func TestPutSkillZipWithAndWithoutBotInstall(t *testing.T) {
 			t.Fatalf("sx.toml missing %q:\n%s", want, manifest)
 		}
 	}
+}
+
+func TestBotTeamFacadeRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	_, client := newGitVaultClient(t)
+
+	if err := client.v.CreateTeam(ctx, mgmt.Team{Name: "Dev", Description: "Development team"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.EnsureBot(ctx, Bot{Name: "reviewer", Description: "Reviews pull requests."}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.AddBotTeam(ctx, "reviewer", "Dev"); err != nil {
+		t.Fatal(err)
+	}
+	teams, err := client.ListTeams(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(teams) != 1 || teams[0].Name != "Dev" || teams[0].Description != "Development team" {
+		t.Fatalf("ListTeams = %+v, want Dev team", teams)
+	}
+	bots, err := client.ListBots(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bots) != 1 || !slices.Contains(bots[0].Teams, "Dev") {
+		t.Fatalf("ListBots after AddBotTeam = %+v, want reviewer on Dev", bots)
+	}
+	if err := client.RemoveBotTeam(ctx, "reviewer", "Dev"); err != nil {
+		t.Fatal(err)
+	}
+	bots, err = client.ListBots(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bots) != 1 || slices.Contains(bots[0].Teams, "Dev") {
+		t.Fatalf("ListBots after RemoveBotTeam = %+v, want reviewer off Dev", bots)
+	}
+}
+
+func TestListTeamsCapsSkillsNewLimitAtServerMaximum(t *testing.T) {
+	var first float64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			OperationName string         `json:"operationName"`
+			Variables     map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.OperationName != "ListTeams" {
+			http.Error(w, "unexpected operation: "+req.OperationName, http.StatusInternalServerError)
+			return
+		}
+		first, _ = req.Variables["first"].(float64)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+			"organization": map[string]any{
+				"teams": map[string]any{
+					"totalCount": 1,
+					"pageInfo":   map[string]any{"hasNextPage": false, "endCursor": nil},
+					"nodes": []any{
+						map[string]any{
+							"id":                 "team-1",
+							"name":               "Dev",
+							"adminMembers":       []any{},
+							"members":            map[string]any{"totalCount": 0, "nodes": []any{}},
+							"skillsRepositories": []any{},
+						},
+					},
+				},
+			},
+		}})
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := OpenSkillsNew(srv.URL, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	teams, err := client.ListTeams(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != 300 {
+		t.Fatalf("ListTeams first = %v, want 300", first)
+	}
+	if len(teams) != 1 || teams[0].Name != "Dev" {
+		t.Fatalf("ListTeams returned %+v, want Dev", teams)
+	}
+}
+
+func TestGetAssetZipAndUninstallAssetFromBot(t *testing.T) {
+	ctx := context.Background()
+	remote, client := newGitVaultClient(t)
+
+	if _, err := client.EnsureBot(ctx, Bot{Name: "reviewer", Description: "Reviews pull requests."}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.PutSkillZip(ctx, SkillZipSpec{
+		Name:        "lint-helper",
+		Version:     "1",
+		Description: "Helps lint.",
+		ZipData:     skillZip(t, "Lint carefully."),
+		BotName:     "reviewer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	zipAsset, err := client.GetAssetZip(ctx, "lint-helper", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zipAsset.Name != "lint-helper" || zipAsset.Version != "1" || zipAsset.Type != "skill" {
+		t.Fatalf("GetAssetZip summary = %+v", zipAsset)
+	}
+	assertZipFileContains(t, zipAsset.Data, "SKILL.md", "Lint carefully.")
+	bots, err := client.ListBots(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bots) != 1 || !hasDirectBotSkill(bots[0].InstalledSkills, "lint-helper") {
+		t.Fatalf("ListBots before uninstall = %+v, want direct lint-helper", bots)
+	}
+	if err := client.UninstallAssetFromBot(ctx, "lint-helper", "reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	bots, err = client.ListBots(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bots) != 1 || hasBotSkill(bots[0].InstalledSkills, "lint-helper") {
+		t.Fatalf("ListBots after uninstall = %+v, want lint-helper removed", bots)
+	}
+
+	clone := cloneRemote(t, remote)
+	manifest := readFile(t, filepath.Join(clone, "sx.toml"))
+	if strings.Contains(manifest, `name = "lint-helper"`) {
+		t.Fatalf("bot-only skill asset stayed in sx.toml after uninstall; this would make it global:\n%s", manifest)
+	}
+	assertFileContains(t, filepath.Join(clone, "assets", "lint-helper", "1", "SKILL.md"), "Lint carefully.")
 }
 
 func TestListAssetsWithOptionsHonorsLimitAndSearch(t *testing.T) {
@@ -749,6 +914,33 @@ func skillZip(t *testing.T, prompt string) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+func assertZipFileContains(t *testing.T, zipData []byte, name, want string) {
+	t.Helper()
+	zr, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range zr.File {
+		if f.Name != name {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("%s in zip missing %q:\n%s", name, want, data)
+		}
+		return
+	}
+	t.Fatalf("zip missing %s", name)
 }
 
 // skillZipWithMetadata produces a skill zip containing both SKILL.md and a

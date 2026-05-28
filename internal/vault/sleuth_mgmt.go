@@ -305,6 +305,21 @@ func (s *SleuthVault) SetAssetInstallation(ctx context.Context, assetName string
 	return fmt.Errorf("unknown install kind: %q", target.Kind)
 }
 
+func (s *SleuthVault) RemoveAssetInstallation(ctx context.Context, assetName string, target InstallTarget) error {
+	if target.Kind != InstallKindBot {
+		return fmt.Errorf("%w: removing %s installations is not supported by skills.new", ErrNotImplemented, target.Kind)
+	}
+	botGID, err := s.botGIDByName(ctx, target.Bot)
+	if err != nil {
+		return err
+	}
+	skillGID, err := s.assetGIDByName(ctx, assetName)
+	if err != nil {
+		return err
+	}
+	return s.uninstallSkillFromBot(ctx, skillGID, botGID)
+}
+
 // ---- Bot management (via the existing skills.new GraphQL surface) ----
 
 // sleuthBotNode is the in-memory shape used by listBotNodes consumers
@@ -318,7 +333,7 @@ type sleuthBotNode struct {
 	Slug            string
 	Description     string
 	Teams           []string // team names
-	InstalledSkills []string
+	InstalledSkills []mgmt.BotSkill
 }
 
 func sleuthBotToMgmt(node sleuthBotNode) mgmt.Bot {
@@ -327,7 +342,7 @@ func sleuthBotToMgmt(node sleuthBotNode) mgmt.Bot {
 		Slug:            node.Slug,
 		Description:     node.Description,
 		Teams:           append([]string(nil), node.Teams...),
-		InstalledSkills: append([]string(nil), node.InstalledSkills...),
+		InstalledSkills: append([]mgmt.BotSkill(nil), node.InstalledSkills...),
 	}
 }
 
@@ -354,24 +369,10 @@ func (s *SleuthVault) listBotNodes(ctx context.Context) ([]sleuthBotNode, error)
 		for j, t := range b.Teams {
 			teams[j] = t.Name
 		}
-		// Mirror the file-based path (resolvedBotSkillNames): dedupe and
-		// sort so mgmt.Bot.InstalledSkills has identical semantics across
-		// vault types. The server has no documented ordering or
-		// dedup guarantee on installedSkills.
-		seen := make(map[string]struct{}, len(b.InstalledSkills))
-		installedSkills := make([]string, 0, len(b.InstalledSkills))
-		for _, skill := range b.InstalledSkills {
-			name := strings.TrimSpace(skill.Name)
-			if name == "" {
-				continue
-			}
-			if _, ok := seen[name]; ok {
-				continue
-			}
-			seen[name] = struct{}{}
-			installedSkills = append(installedSkills, name)
-		}
-		slices.Sort(installedSkills)
+		installedSkills := cleanBotSkills(len(b.InstalledSkills), func(i int) (string, bool) {
+			skill := b.InstalledSkills[i]
+			return skill.Name, skill.IsDirectInstall
+		})
 		nodes[i] = sleuthBotNode{
 			ID:              b.Id,
 			Name:            b.Name,
@@ -381,12 +382,36 @@ func (s *SleuthVault) listBotNodes(ctx context.Context) ([]sleuthBotNode, error)
 			InstalledSkills: installedSkills,
 		}
 	}
+	warnIfBotListSoftCap(nodes)
+	return nodes, nil
+}
+
+func cleanBotSkills(n int, skillAt func(int) (string, bool)) []mgmt.BotSkill {
+	byName := make(map[string]bool, n)
+	for i := range n {
+		name, isDirect := skillAt(i)
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		byName[name] = byName[name] || isDirect
+	}
+	out := make([]mgmt.BotSkill, 0, len(byName))
+	for name, isDirect := range byName {
+		out = append(out, mgmt.BotSkill{Name: name, IsDirectInstall: isDirect})
+	}
+	slices.SortFunc(out, func(a, b mgmt.BotSkill) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return out
+}
+
+func warnIfBotListSoftCap(nodes []sleuthBotNode) {
 	if len(nodes) >= sleuthBotListSoftCap {
 		logger.Get().Warn("ListBots result reached the soft cap; some bots may be truncated by an undeclared server-side limit",
 			"soft_cap", sleuthBotListSoftCap,
 			"returned", len(nodes))
 	}
-	return nodes, nil
 }
 
 func (s *SleuthVault) ListBots(ctx context.Context) ([]mgmt.Bot, error) {

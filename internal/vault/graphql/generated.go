@@ -1026,11 +1026,17 @@ func (v *ListBotsBotsManagedBot) GetInstalledSkills() []ListBotsBotsManagedBotIn
 //
 // Lightweight skill info for display on bot detail page.
 type ListBotsBotsManagedBotInstalledSkillsBotInstalledSkill struct {
-	Name string `json:"name"`
+	Name            string `json:"name"`
+	IsDirectInstall bool   `json:"isDirectInstall"`
 }
 
 // GetName returns ListBotsBotsManagedBotInstalledSkillsBotInstalledSkill.Name, and is useful for accessing the field via an interface.
 func (v *ListBotsBotsManagedBotInstalledSkillsBotInstalledSkill) GetName() string { return v.Name }
+
+// GetIsDirectInstall returns ListBotsBotsManagedBotInstalledSkillsBotInstalledSkill.IsDirectInstall, and is useful for accessing the field via an interface.
+func (v *ListBotsBotsManagedBotInstalledSkillsBotInstalledSkill) GetIsDirectInstall() bool {
+	return v.IsDirectInstall
+}
 
 // ListBotsBotsManagedBotTeamsTeam includes the requested fields of the GraphQL type Team.
 type ListBotsBotsManagedBotTeamsTeam struct {
@@ -4061,6 +4067,7 @@ query ListBots {
 		}
 		installedSkills {
 			name
+			isDirectInstall
 		}
 	}
 }

@@ -40,9 +40,15 @@ type Bot struct {
 	Description string
 	Teams       []string
 	// InstalledSkills is the bot's resolved skill set (direct + team
-	// + org-wide installs), deduplicated and sorted. Vault implementations
-	// must present the same shape so callers don't branch on vault type.
-	InstalledSkills []string
+	// + org-wide installs), deduplicated and sorted. IsDirectInstall marks
+	// skills attached directly to this bot so callers can edit only those
+	// attachments without maintaining a second parallel skill list.
+	InstalledSkills []BotSkill
+}
+
+type BotSkill struct {
+	Name            string
+	IsDirectInstall bool
 }
 
 // IsOnTeam returns true if the bot is a member of the named team.

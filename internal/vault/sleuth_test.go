@@ -171,8 +171,8 @@ func TestSleuthVault_CreateBotRuntimeToken_QueryShape(t *testing.T) {
 						"description": "Reviews pull requests.",
 						"teams":       []any{},
 						"installedSkills": []any{
-							map[string]any{"name": "fix-pr"},
-							map[string]any{"name": "webapp-testing"},
+							map[string]any{"name": "fix-pr", "isDirectInstall": true},
+							map[string]any{"name": "webapp-testing", "isDirectInstall": false},
 						},
 					},
 				},
@@ -230,8 +230,8 @@ func TestSleuthVault_RevokeBotRuntimeTokens_QueryShape(t *testing.T) {
 						"description": "Reviews pull requests.",
 						"teams":       []any{},
 						"installedSkills": []any{
-							map[string]any{"name": "fix-pr"},
-							map[string]any{"name": "webapp-testing"},
+							map[string]any{"name": "fix-pr", "isDirectInstall": true},
+							map[string]any{"name": "webapp-testing", "isDirectInstall": false},
 						},
 					},
 				},
@@ -277,9 +277,9 @@ func TestSleuthVault_ListBots_ProjectsSlug(t *testing.T) {
 						"description": "Reviews pull requests.",
 						"teams":       []any{},
 						"installedSkills": []any{
-							map[string]any{"name": "webapp-testing"},
-							map[string]any{"name": "fix-pr"},
-							map[string]any{"name": "fix-pr"},
+							map[string]any{"name": "webapp-testing", "isDirectInstall": false},
+							map[string]any{"name": "fix-pr", "isDirectInstall": true},
+							map[string]any{"name": "fix-pr", "isDirectInstall": true},
 						},
 					},
 				},
@@ -298,7 +298,10 @@ func TestSleuthVault_ListBots_ProjectsSlug(t *testing.T) {
 	if bots[0].Slug != "reviewer" {
 		t.Fatalf("bots[0].Slug = %q, want reviewer", bots[0].Slug)
 	}
-	want := []string{"fix-pr", "webapp-testing"}
+	want := []mgmt.BotSkill{
+		{Name: "fix-pr", IsDirectInstall: true},
+		{Name: "webapp-testing", IsDirectInstall: false},
+	}
 	if !slices.Equal(bots[0].InstalledSkills, want) {
 		t.Fatalf("bots[0].InstalledSkills = %v, want %v (sorted, deduped)", bots[0].InstalledSkills, want)
 	}

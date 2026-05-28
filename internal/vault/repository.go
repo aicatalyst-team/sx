@@ -149,6 +149,10 @@ type Vault interface {
 	// list in sx.toml; Sleuth vaults delegate to the server.
 	SetAssetInstallation(ctx context.Context, assetName string, target InstallTarget) error
 
+	// RemoveAssetInstallation removes one installation target from an
+	// asset. Missing assets or missing target rows are soft no-ops.
+	RemoveAssetInstallation(ctx context.Context, assetName string, target InstallTarget) error
+
 	// ClearAssetInstallations removes every installation target from an
 	// asset. Soft no-op if the asset is absent from the vault.
 	ClearAssetInstallations(ctx context.Context, assetName string) error

@@ -452,7 +452,11 @@ func TestPathVault_BotLifecycleE2E(t *testing.T) {
 	// The helper returns InstalledSkills sorted, so pin the exact set so a
 	// future regression that adds duplicates or includes other-bot/user
 	// skills is caught — not just the contains/not-contains pattern.
-	wantSkills := []string{"direct", "global", "team-only"}
+	wantSkills := []mgmt.BotSkill{
+		{Name: "direct", IsDirectInstall: true},
+		{Name: "global", IsDirectInstall: false},
+		{Name: "team-only", IsDirectInstall: false},
+	}
 	if !slices.Equal(bots[0].InstalledSkills, wantSkills) {
 		t.Errorf("bot[0].InstalledSkills = %v, want %v", bots[0].InstalledSkills, wantSkills)
 	}
