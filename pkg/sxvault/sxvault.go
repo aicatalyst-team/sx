@@ -934,6 +934,9 @@ func (c *Client) addAssetWithResult(ctx context.Context, ast *lockfile.Asset, zi
 		// to the uploaded asset, not a different one sharing the name.
 		if slug := strings.TrimSpace(exists.Slug); slug != "" {
 			result.Name = slug
+			// Keep ast in sync so a future non-Sleuth InheritInstallations
+			// that reads ast.Name sees the resolved slug, not the request.
+			ast.Name = slug
 		}
 		if err := c.v.InheritInstallations(ctx, ast); err != nil {
 			return vault.AddAssetResult{}, err
@@ -941,7 +944,11 @@ func (c *Client) addAssetWithResult(ctx context.Context, ast *lockfile.Asset, zi
 		return result, nil
 	}
 	if ast.SourcePath == nil && ast.SourceHTTP == nil && ast.SourceGit == nil {
-		ast.SourcePath = &lockfile.SourcePath{Path: "assets/" + ast.Name + "/" + ast.Version}
+		// Use the canonical result.Name so a normalized slug propagates into
+		// the synthesized source path. (Today the only normalizing vault,
+		// Sleuth, always sets SourceHTTP itself, so this branch is git/path
+		// where result.Name == ast.Name — but don't depend on that here.)
+		ast.SourcePath = &lockfile.SourcePath{Path: "assets/" + result.Name + "/" + ast.Version}
 	}
 	if err := c.v.InheritInstallations(ctx, ast); err != nil {
 		return vault.AddAssetResult{}, err

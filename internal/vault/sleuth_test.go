@@ -622,6 +622,12 @@ func TestSleuthVault_AddAsset_ConflictByStatusCarriesSlug(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
+	// Server contract: this pins only the SX side — that we PARSE the
+	// conflict response's asset.name as the slug. The server must ALSO
+	// guarantee that field carries the persisted slug ("foo_skill"), not the
+	// display name ("foo"); if it ever returns the display name on conflict,
+	// the upload-collision re-publish fix silently regresses and this test
+	// would not catch it.
 	v := NewSleuthVault(srv.URL, "test-token")
 	_, err := v.AddAssetWithResult(context.Background(), &lockfile.Asset{Name: "foo", Version: "1"}, []byte("zip"))
 	var exists *ErrVersionExists
