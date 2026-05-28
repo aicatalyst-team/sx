@@ -259,9 +259,13 @@ func (s *SleuthVault) AddAssetWithResult(ctx context.Context, asset *lockfile.As
 		} `json:"asset"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&uploadResp); err != nil {
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return AddAssetResult{}, fmt.Errorf("failed to read upload response: %w", err)
+	}
+	if err := json.Unmarshal(respBody, &uploadResp); err != nil {
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-			return AddAssetResult{}, fmt.Errorf("HTTP %d", resp.StatusCode)
+			return AddAssetResult{}, httpStatusError(resp.StatusCode, respBody)
 		}
 		return AddAssetResult{}, fmt.Errorf("failed to parse response: %w", err)
 	}
@@ -290,7 +294,7 @@ func (s *SleuthVault) AddAssetWithResult(ctx context.Context, asset *lockfile.As
 		if uploadResp.Error != "" {
 			return AddAssetResult{}, errors.New(uploadResp.Error)
 		}
-		return AddAssetResult{}, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return AddAssetResult{}, httpStatusError(resp.StatusCode, respBody)
 	}
 
 	if !uploadResp.Success {
@@ -313,6 +317,14 @@ func (s *SleuthVault) AddAssetWithResult(ctx context.Context, asset *lockfile.As
 		URL:            uploadResp.Asset.URL,
 		IsFirstVersion: uploadResp.Asset.IsFirstVersion,
 	}, nil
+}
+
+func httpStatusError(statusCode int, body []byte) error {
+	bodyText := strings.TrimSpace(string(body))
+	if bodyText == "" {
+		return fmt.Errorf("HTTP %d", statusCode)
+	}
+	return fmt.Errorf("HTTP %d: %s", statusCode, bodyText)
 }
 
 // GetVersionList retrieves available versions for an asset

@@ -399,12 +399,13 @@ func TestPutSkillZipWithBotClearsDefaultUploadInstall(t *testing.T) {
 }
 
 // TestPutAgentClearsDefaultUploadInstallOnFirstVersion verifies PutAgent
-// mirrors PutSkillZip: a brand-new (first-version) agent upload strips the
-// server's default org-wide install before the bot install, so the agent
-// lands only on its bot.
+// strips the server's default org-wide install for a brand-new Sleuth agent
+// upload. Skills.new does not expose an agent-to-bot install mutation, so the
+// uploaded agent asset is not routed through installSkillToBot.
 func TestPutAgentClearsDefaultUploadInstallOnFirstVersion(t *testing.T) {
 	ctx := context.Background()
 	var clearedAsset string
+	var ops []string
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -429,6 +430,7 @@ func TestPutAgentClearsDefaultUploadInstallOnFirstVersion(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
+			ops = append(ops, req.OperationName)
 			if req.OperationName == "RemoveAssetInstallations" {
 				input, _ := req.Variables["input"].(map[string]any)
 				clearedAsset, _ = input["assetName"].(string)
@@ -455,6 +457,10 @@ func TestPutAgentClearsDefaultUploadInstallOnFirstVersion(t *testing.T) {
 	}
 	if clearedAsset != "my-agent_agent" {
 		t.Fatalf("ClearAssetInstallations asset = %q, want server slug my-agent_agent", clearedAsset)
+	}
+	wantOps := "ListBots,ListBots,BotInstalled,RemoveAssetInstallations"
+	if gotOps := strings.Join(ops, ","); gotOps != wantOps {
+		t.Fatalf("GraphQL ops = %s, want %s", gotOps, wantOps)
 	}
 }
 

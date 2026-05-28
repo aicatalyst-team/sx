@@ -639,6 +639,23 @@ func TestSleuthVault_AddAsset_ConflictByStatusCarriesSlug(t *testing.T) {
 	}
 }
 
+func TestSleuthVault_AddAssetHTTPErrorIncludesBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/skills/assets" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "agent install exploded", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	_, err := v.AddAssetWithResult(context.Background(), &lockfile.Asset{Name: "foo", Version: "1"}, []byte("zip"))
+	if err == nil || !strings.Contains(err.Error(), "HTTP 500:") || !strings.Contains(err.Error(), "agent install exploded") {
+		t.Fatalf("AddAssetWithResult err = %v, want status plus response body", err)
+	}
+}
+
 // TestSleuthVault_InstallSkillToBot_AmbiguousNameErrors covers the case
 // where no asset matches the requested value as a slug but two distinct
 // assets share it as a display name. The resolver must surface an

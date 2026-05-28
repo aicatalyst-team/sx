@@ -404,8 +404,11 @@ func (c *Client) ensureBot(ctx context.Context, bot Bot) (string, error) {
 	})
 }
 
-// PutAgent uploads an agent asset and installs it (plus any listed skills)
-// on the named bot.
+// PutAgent uploads an agent asset and installs any listed skills on the named
+// bot. File-backed vaults also record a bot scope on the agent asset itself;
+// the Skills.new backend does not expose an agent-to-bot install mutation, so
+// there the agent asset is stored as a standalone prompt record while skills
+// are installed to the bot.
 //
 // Re-publishing an existing AssetName@Version is idempotent for the manifest:
 // the version is listed once and installations are re-run, which also makes
@@ -416,7 +419,7 @@ func (c *Client) ensureBot(ctx context.Context, bot Bot) (string, error) {
 // guaranteed update across all backends.
 //
 // PutAgent is NOT transactional. The flow runs as: EnsureBot → validate
-// skills → upload asset → install agent on bot → install each skill on bot.
+// skills → upload asset → install agent on bot when supported → install each skill on bot.
 // If any step after the asset upload fails (e.g. a transient git push race
 // on the Nth skill), partial install state is left in the vault. Every step
 // is idempotent, so the caller should retry the same PutAgent call to
@@ -477,15 +480,22 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 			return AgentResult{}, fmt.Errorf("sxvault: clearing default installations for %q: %w", agentName, err)
 		}
 	}
-	if err := c.installAssetToBot(ctx, agentName, spec.BotName); err != nil {
-		return AgentResult{}, err
+	if shouldInstallAgentAssetToBot(c.v) {
+		if err := c.installAssetToBot(ctx, agentName, spec.BotName); err != nil {
+			return AgentResult{}, fmt.Errorf("sxvault: installing agent %q on bot %q: %w", agentName, spec.BotName, err)
+		}
 	}
 	for _, skill := range skills {
 		if err := c.installAssetToBot(ctx, skill, spec.BotName); err != nil {
-			return AgentResult{}, err
+			return AgentResult{}, fmt.Errorf("sxvault: installing skill %q on bot %q: %w", skill, spec.BotName, err)
 		}
 	}
 	return AgentResult{BotKey: botKey}, nil
+}
+
+func shouldInstallAgentAssetToBot(v vault.Vault) bool {
+	_, isSleuth := v.(*vault.SleuthVault)
+	return !isSleuth
 }
 
 // validateSkillExists asserts the named asset is a published skill in the
