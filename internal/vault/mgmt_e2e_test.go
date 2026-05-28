@@ -240,7 +240,6 @@ func TestPathVault_TeamUserLifecycleE2E(t *testing.T) {
 	}
 }
 
-// TestPathVault_BotUpdate_PreservesTeams pins the contract that a
 // TestPathVault_PathInstall_OrderInsensitive verifies that a path-scoped
 // install can be removed regardless of the order the caller lists the
 // paths in. Set and remove both canonicalize (sort) the path list, so
@@ -315,6 +314,7 @@ func TestPathVault_PathInstall_OrderInsensitive(t *testing.T) {
 	}
 }
 
+// TestPathVault_BotUpdate_PreservesTeams pins the contract that a
 // description-only update (Teams = nil) leaves existing team
 // memberships intact. The CLI's newBotUpdateCommand sets Teams to nil
 // to avoid the read-modify-write race that would clobber concurrent
