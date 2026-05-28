@@ -1,8 +1,8 @@
 // Package sxvault exposes a small, stable management facade over SX vaults.
 //
 // Scope: this facade currently covers the publish / manage write path
-// (OpenSkillsNew / OpenGit / OpenPath constructors; EnsureBot, PutAgent,
-// PutSkillZip, InstallAssetToBot mutators; ListAssets read-only browse).
+// (OpenSkillsNew / OpenGit / OpenPath constructors; EnsureBot, DeleteBot,
+// PutAgent, PutSkillZip, InstallAssetToBot mutators; ListAssets read-only browse).
 // Read-side primitives that the internal vault.Vault interface supports —
 // GetMetadata, GetAssetByVersion, RemoveAsset, RenameAsset, asset-uninstall —
 // are intentionally NOT re-exported yet and are reserved for a follow-up
@@ -534,6 +534,20 @@ func (c *Client) ListBots(ctx context.Context) ([]BotSummary, error) {
 		})
 	}
 	return out, nil
+}
+
+// DeleteBot removes the named bot from the vault. File-backed vaults also
+// remove any bot-scoped asset installations targeting that bot; asset versions
+// themselves remain in the vault.
+func (c *Client) DeleteBot(ctx context.Context, botName string) error {
+	if c == nil || c.v == nil {
+		return errors.New("sxvault: nil client")
+	}
+	botName = strings.TrimSpace(botName)
+	if botName == "" {
+		return errors.New("sxvault: bot name required")
+	}
+	return c.v.DeleteBot(c.actorContext(ctx), botName)
 }
 
 func (c *Client) CreateBotRuntimeToken(ctx context.Context, spec BotRuntimeTokenSpec) (BotRuntimeTokenResult, error) {

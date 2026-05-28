@@ -174,6 +174,46 @@ func TestListBotsAndRuntimeTokens(t *testing.T) {
 	}
 }
 
+func TestDeleteBotRemovesBotAndBotScopes(t *testing.T) {
+	ctx := context.Background()
+	remote, client := newGitVaultClient(t)
+
+	if _, err := client.EnsureBot(ctx, Bot{Name: "reviewer-bot", Description: "Reviewer bot."}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.PutSkillZip(ctx, SkillZipSpec{
+		Name:        "lint-helper",
+		Version:     "1",
+		Description: "Helps with lint fixes.",
+		BotName:     "reviewer-bot",
+		ZipData:     skillZip(t, "Lint carefully."),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.DeleteBot(ctx, "reviewer-bot"); err != nil {
+		t.Fatal(err)
+	}
+	bots, err := client.ListBots(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bots) != 0 {
+		t.Fatalf("ListBots after DeleteBot = %+v, want none", bots)
+	}
+
+	clone := cloneRemote(t, remote)
+	manifest := readFile(t, filepath.Join(clone, "sx.toml"))
+	for _, unwanted := range []string{`name = "reviewer-bot"`, `bot = "reviewer-bot"`} {
+		if strings.Contains(manifest, unwanted) {
+			t.Fatalf("sx.toml still contains %q after DeleteBot:\n%s", unwanted, manifest)
+		}
+	}
+	if !strings.Contains(manifest, `name = "lint-helper"`) {
+		t.Fatalf("sx.toml lost skill asset after DeleteBot:\n%s", manifest)
+	}
+	assertFileContains(t, filepath.Join(clone, "assets", "lint-helper", "1", "SKILL.md"), "Lint carefully.")
+}
+
 func TestPutAgentSameVersionIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	remote, client := newGitVaultClient(t)
