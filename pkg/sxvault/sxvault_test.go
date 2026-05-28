@@ -412,7 +412,7 @@ func TestBotTeamFacadeRoundTrip(t *testing.T) {
 	}
 }
 
-func TestListTeamsCapsSkillsNewLimitAtServerMaximum(t *testing.T) {
+func TestListTeamsSendsServerMaximumLimit(t *testing.T) {
 	var first float64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -457,11 +457,46 @@ func TestListTeamsCapsSkillsNewLimitAtServerMaximum(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first != 300 {
-		t.Fatalf("ListTeams first = %v, want 300", first)
+	if first != defaultTeamsLimit {
+		t.Fatalf("ListTeams first = %v, want %d", first, defaultTeamsLimit)
 	}
 	if len(teams) != 1 || teams[0].Name != "Dev" {
 		t.Fatalf("ListTeams returned %+v, want Dev", teams)
+	}
+}
+
+// TestListTeamsErrorsWhenTruncated verifies ListTeams surfaces an error
+// rather than a silent partial slice when the backend reports more teams
+// beyond the requested limit.
+func TestListTeamsErrorsWhenTruncated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+			"organization": map[string]any{
+				"teams": map[string]any{
+					"totalCount": defaultTeamsLimit + 1,
+					"pageInfo":   map[string]any{"hasNextPage": true, "endCursor": "cursor"},
+					"nodes": []any{
+						map[string]any{
+							"id":                 "team-1",
+							"name":               "Dev",
+							"adminMembers":       []any{},
+							"members":            map[string]any{"totalCount": 0, "nodes": []any{}},
+							"skillsRepositories": []any{},
+						},
+					},
+				},
+			},
+		}})
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := OpenSkillsNew(srv.URL, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ListTeams(context.Background()); err == nil {
+		t.Fatal("ListTeams with truncated results succeeded, want error")
 	}
 }
 

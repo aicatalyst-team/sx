@@ -369,10 +369,7 @@ func (s *SleuthVault) listBotNodes(ctx context.Context) ([]sleuthBotNode, error)
 		for j, t := range b.Teams {
 			teams[j] = t.Name
 		}
-		installedSkills := cleanBotSkills(len(b.InstalledSkills), func(i int) (string, bool) {
-			skill := b.InstalledSkills[i]
-			return skill.Name, skill.IsDirectInstall
-		})
+		installedSkills := cleanBotSkills(b.InstalledSkills)
 		nodes[i] = sleuthBotNode{
 			ID:              b.Id,
 			Name:            b.Name,
@@ -386,15 +383,17 @@ func (s *SleuthVault) listBotNodes(ctx context.Context) ([]sleuthBotNode, error)
 	return nodes, nil
 }
 
-func cleanBotSkills(n int, skillAt func(int) (string, bool)) []mgmt.BotSkill {
-	byName := make(map[string]bool, n)
-	for i := range n {
-		name, isDirect := skillAt(i)
-		name = strings.TrimSpace(name)
+// cleanBotSkills dedupes a bot's installed skills by name, OR-ing the
+// IsDirectInstall flag across duplicate entries, and returns them sorted by
+// name.
+func cleanBotSkills(skills []vaultgql.ListBotsBotsManagedBotInstalledSkillsBotInstalledSkill) []mgmt.BotSkill {
+	byName := make(map[string]bool, len(skills))
+	for _, skill := range skills {
+		name := strings.TrimSpace(skill.Name)
 		if name == "" {
 			continue
 		}
-		byName[name] = byName[name] || isDirect
+		byName[name] = byName[name] || skill.IsDirectInstall
 	}
 	out := make([]mgmt.BotSkill, 0, len(byName))
 	for name, isDirect := range byName {

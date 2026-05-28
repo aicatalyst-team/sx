@@ -2,12 +2,16 @@
 //
 // Scope: this facade currently covers the publish / manage write path
 // (OpenSkillsNew / OpenGit / OpenPath constructors; EnsureBot, DeleteBot,
-// PutAgent, PutSkillZip, InstallAssetToBot mutators; ListAssets read-only browse).
-// Read-side primitives that the internal vault.Vault interface supports —
-// GetMetadata, RemoveAsset, RenameAsset, broad asset-uninstall —
-// are intentionally NOT re-exported yet and are reserved for a follow-up
-// release once consumer needs are clearer. Library consumers needing them
-// today should treat the absence as a "not yet" rather than a "never."
+// PutAgent, PutSkillZip, InstallAssetToBot mutators) plus read-only browse
+// and download (ListAssets, GetAssetZip). GetAssetZip is the one narrow
+// read path: it wraps the internal GetMetadata / GetAssetByVersion calls
+// and exposes only the asset type, description, and raw zip bytes through
+// AssetZip. The raw GetMetadata / GetAssetByVersion interfaces, along with
+// the broad mutators the internal vault.Vault supports — RemoveAsset,
+// RenameAsset, broad asset-uninstall — remain internal and are NOT
+// re-exported yet, reserved for a follow-up release once consumer needs
+// are clearer. Library consumers needing them today should treat the
+// absence as a "not yet" rather than a "never."
 package sxvault
 
 import (
@@ -584,13 +588,25 @@ func (c *Client) DeleteBot(ctx context.Context, botName string) error {
 	return c.v.DeleteBot(c.actorContext(ctx), botName)
 }
 
+// defaultTeamsLimit is the page size ListTeams requests. It matches the
+// Sleuth backend's server-side maximum (internal/vault.sleuthTeamLookupPageSize),
+// so a single call returns every team up to that ceiling. ListTeams surfaces
+// an error rather than silently truncating when a vault exceeds it.
+const defaultTeamsLimit = 300
+
 func (c *Client) ListTeams(ctx context.Context) ([]TeamSummary, error) {
 	if c == nil || c.v == nil {
 		return nil, errors.New("sxvault: nil client")
 	}
-	result, err := c.v.ListTeams(c.actorContext(ctx), vault.ListTeamsOptions{Limit: 300})
+	result, err := c.v.ListTeams(c.actorContext(ctx), vault.ListTeamsOptions{Limit: defaultTeamsLimit})
 	if err != nil {
 		return nil, err
+	}
+	// ListTeams reads as an "all teams" call but the backend caps results at
+	// defaultTeamsLimit. Fail loudly on truncation instead of handing back a
+	// silent partial view — there is no pagination knob on this surface yet.
+	if result.HasMore {
+		return nil, fmt.Errorf("sxvault: vault has more than %d teams; listing that many is not yet supported", defaultTeamsLimit)
 	}
 	out := make([]TeamSummary, 0, len(result.Teams))
 	for _, t := range result.Teams {
@@ -758,6 +774,15 @@ func (c *Client) ListAssetsWithOptions(ctx context.Context, opts ListOptions) ([
 	return out, nil
 }
 
+// GetAssetZip downloads a single asset version from the vault. It is the
+// only download affordance on the public surface.
+//
+// When version is empty, the highest-semver version is selected; if no
+// version parses as semver, the last entry in the vault's version list is
+// used as a fallback (see highestSemver). The returned AssetZip.Type is the
+// asset type key (e.g. "skill", "agent"), AssetZip.Description comes from the
+// asset metadata, and AssetZip.Data holds the zip bytes exactly as the vault
+// backend stores them.
 func (c *Client) GetAssetZip(ctx context.Context, name, version string) (AssetZip, error) {
 	if c == nil || c.v == nil {
 		return AssetZip{}, errors.New("sxvault: nil client")

@@ -43,6 +43,7 @@ const (
 	EventAssetRenamed   = "asset.renamed"
 	EventInstallSet     = "install.set"
 	EventInstallCleared = "install.cleared"
+	EventInstallRemoved = "install.removed"
 )
 
 // Audit target type constants.

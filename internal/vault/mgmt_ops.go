@@ -864,7 +864,7 @@ func commonRemoveAssetInstallation(vaultRoot string, actor mgmt.Actor, assetName
 		}
 		m.Assets = kept
 		return &mgmt.AuditEvent{
-			Event:      mgmt.EventInstallCleared,
+			Event:      mgmt.EventInstallRemoved,
 			TargetType: mgmt.TargetTypeInstallation,
 			Target:     assetName,
 			Data:       target.AuditData(),
@@ -903,7 +903,13 @@ func installTargetScope(target InstallTarget, actor mgmt.Actor) (manifest.Scope,
 		if target.Repo == "" || len(target.Paths) == 0 {
 			return manifest.Scope{}, errors.New("path installation requires repo URL and at least one path")
 		}
-		return manifest.Scope{Kind: manifest.ScopeKindPath, Repo: scope.NormalizeRepoURL(target.Repo), Paths: target.Paths}, nil
+		// Sort a copy of the paths so set/remove are order-insensitive:
+		// installScopeMatches compares with slices.Equal, so a caller
+		// removing ["b","a"] must match a row stored as ["a","b"]. We never
+		// mutate the caller's slice.
+		paths := append([]string(nil), target.Paths...)
+		slices.Sort(paths)
+		return manifest.Scope{Kind: manifest.ScopeKindPath, Repo: scope.NormalizeRepoURL(target.Repo), Paths: paths}, nil
 	case InstallKindTeam:
 		if target.Team == "" {
 			return manifest.Scope{}, errors.New("team installation missing team name")

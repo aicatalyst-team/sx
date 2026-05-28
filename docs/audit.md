@@ -43,7 +43,8 @@ conditions hold. `--since` accepts `Nd` (days) or `all`.
 | `bot.team_added` | `bot` | bot name | `team` |
 | `bot.team_removed` | `bot` | bot name | `team`, optional `reason` (e.g. `team_deleted`) |
 | `install.set` | `installation` | asset name | `kind`, plus one of `repo`/`paths`/`team`/`user`/`bot` |
-| `install.cleared` | `installation` | asset name | `kind`, `reason` (e.g. `team_deleted`, `bot_deleted`) |
+| `install.removed` | `installation` | asset name | `kind`, plus one of `repo`/`paths`/`team`/`user`/`bot` (one specific target was removed) |
+| `install.cleared` | `installation` | asset name | `kind`, `reason` (e.g. `team_deleted`, `bot_deleted`) (every install row was cleared) |
 
 Cascade events are emitted automatically:
 
