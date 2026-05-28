@@ -2745,6 +2745,7 @@ type BotInstalledSkill {
   description: String!
   createdAt: DateTime!
   usageCount: Int!
+  isDirectInstall: Boolean!
 }
 
 """An API key for a bot, showing masked token for identification."""

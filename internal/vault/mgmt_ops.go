@@ -447,7 +447,7 @@ func commonListBots(vaultRoot string) ([]mgmt.Bot, error) {
 	out := make([]mgmt.Bot, len(m.Bots))
 	for i, b := range m.Bots {
 		out[i] = manifestBotToMgmt(b)
-		out[i].InstalledSkills = resolvedBotSkillNames(m, b.Name)
+		out[i].InstalledSkills = resolvedBotSkills(m, b.Name)
 	}
 	return out, nil
 }
@@ -463,17 +463,17 @@ func commonGetBot(vaultRoot, name string) (*mgmt.Bot, error) {
 		return nil, err
 	}
 	out := manifestBotToMgmt(*bot)
-	out.InstalledSkills = resolvedBotSkillNames(m, bot.Name)
+	out.InstalledSkills = resolvedBotSkills(m, bot.Name)
 	return &out, nil
 }
 
-func resolvedBotSkillNames(m *manifest.Manifest, botName string) []string {
+func resolvedBotSkills(m *manifest.Manifest, botName string) []mgmt.BotSkill {
 	lf := manifest.Resolve(m, mgmt.Actor{Email: "bot:" + botName, Bot: botName})
 	if lf == nil || len(lf.Assets) == 0 {
 		return nil
 	}
-	seen := make(map[string]struct{}, len(lf.Assets))
-	out := make([]string, 0, len(lf.Assets))
+	direct := directBotSkillNameSet(m, botName)
+	byName := make(map[string]mgmt.BotSkill, len(lf.Assets))
 	for _, resolvedAsset := range lf.Assets {
 		if resolvedAsset.Type.Key != asset.TypeSkill.Key {
 			continue
@@ -482,13 +482,39 @@ func resolvedBotSkillNames(m *manifest.Manifest, botName string) []string {
 		if name == "" {
 			continue
 		}
-		if _, ok := seen[name]; ok {
+		if _, ok := byName[name]; ok {
 			continue
 		}
-		seen[name] = struct{}{}
-		out = append(out, name)
+		_, isDirect := direct[name]
+		byName[name] = mgmt.BotSkill{Name: name, IsDirectInstall: isDirect}
 	}
-	slices.Sort(out)
+	out := make([]mgmt.BotSkill, 0, len(byName))
+	for _, skill := range byName {
+		out = append(out, skill)
+	}
+	slices.SortFunc(out, func(a, b mgmt.BotSkill) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return out
+}
+
+func directBotSkillNameSet(m *manifest.Manifest, botName string) map[string]struct{} {
+	out := make(map[string]struct{})
+	for _, a := range m.Assets {
+		if a.Type.Key != asset.TypeSkill.Key {
+			continue
+		}
+		name := strings.TrimSpace(a.Name)
+		if name == "" {
+			continue
+		}
+		for _, s := range a.Scopes {
+			if s.Kind == manifest.ScopeKindBot && s.Bot == botName {
+				out[name] = struct{}{}
+				break
+			}
+		}
+	}
 	return out
 }
 
@@ -733,7 +759,7 @@ func commonSetAssetInstallation(vaultRoot string, actor mgmt.Actor, assetName st
 		s = manifest.Scope{
 			Kind:  manifest.ScopeKindPath,
 			Repo:  scope.NormalizeRepoURL(target.Repo),
-			Paths: target.Paths,
+			Paths: canonicalPaths(target.Paths),
 		}
 	case InstallKindTeam:
 		if target.Team == "" {
@@ -793,6 +819,63 @@ func commonSetAssetInstallation(vaultRoot string, actor mgmt.Actor, assetName st
 	})
 }
 
+// commonRemoveAssetInstallation removes a single installation target from
+// every manifest row for the named asset. If removing the target would leave
+// a row with no scopes, the row is dropped instead of becoming global.
+func commonRemoveAssetInstallation(vaultRoot string, actor mgmt.Actor, assetName string, target InstallTarget) error {
+	needle, err := installTargetScope(target, actor)
+	if err != nil {
+		return err
+	}
+	return withManifest(vaultRoot, actor, func(m *manifest.Manifest) (*mgmt.AuditEvent, error) {
+		if target.Kind == InstallKindTeam {
+			if _, err := requireTeamAdminInTx(m, target.Team, actor); err != nil {
+				return nil, err
+			}
+		}
+		if target.Kind == InstallKindBot {
+			if _, err := findBotForMgmt(m, target.Bot); err != nil {
+				return nil, err
+			}
+		}
+		// Walk every entry for assetName, not just FindAsset's first match:
+		// repo/path scopes are inherited onto each new version row
+		// (inheritAssetScopesFromManifest), so the same scope can live on
+		// multiple same-name rows and all must be cleared. A row left with
+		// no scopes is dropped rather than reinterpreted as global.
+		changed := false
+		kept := m.Assets[:0]
+		for _, a := range m.Assets {
+			if a.Name != assetName || len(a.Scopes) == 0 {
+				kept = append(kept, a)
+				continue
+			}
+			nextScopes := a.Scopes[:0]
+			for _, s := range a.Scopes {
+				if installScopeMatches(s, needle) {
+					changed = true
+					continue
+				}
+				nextScopes = append(nextScopes, s)
+			}
+			a.Scopes = nextScopes
+			if len(a.Scopes) > 0 {
+				kept = append(kept, a)
+			}
+		}
+		if !changed {
+			return nil, nil
+		}
+		m.Assets = kept
+		return &mgmt.AuditEvent{
+			Event:      mgmt.EventInstallRemoved,
+			TargetType: mgmt.TargetTypeInstallation,
+			Target:     assetName,
+			Data:       target.AuditData(),
+		}, nil
+	})
+}
+
 // commonClearAssetInstallations removes every scope from the named asset.
 // Missing asset is a soft no-op so admins can clean up orphaned entries
 // safely.
@@ -811,6 +894,89 @@ func commonClearAssetInstallations(vaultRoot string, actor mgmt.Actor, assetName
 	})
 }
 
+// canonicalPaths returns a sorted copy of paths so path-scope rows are
+// stored and compared in a canonical order. Set and remove route their
+// paths through here on the way in, and installScopeMatches /
+// scopeExistsOnAsset canonicalize both sides at comparison time — so a row
+// hand-edited in sx.toml or written by an older sx version in unsorted
+// order still matches regardless of the order a caller passes. The
+// caller's slice is never mutated.
+func canonicalPaths(paths []string) []string {
+	out := append([]string(nil), paths...)
+	slices.Sort(out)
+	return out
+}
+
+func installTargetScope(target InstallTarget, actor mgmt.Actor) (manifest.Scope, error) {
+	switch target.Kind {
+	case InstallKindOrg:
+		// An org-wide install is stored as an empty scope list, not an org
+		// scope row, so there is no row for commonRemoveAssetInstallation to
+		// match — it would silently no-op. ClearAssetInstallations can't undo
+		// it either (an already-empty scope list is its no-op case); the only
+		// way to stop distributing a globally-installed asset is to remove
+		// the asset from the vault.
+		return manifest.Scope{}, fmt.Errorf("%w: an org-wide install has no scope row to remove; remove the asset from the vault to stop distributing it", ErrNotImplemented)
+	case InstallKindRepo:
+		if target.Repo == "" {
+			return manifest.Scope{}, errors.New("repo installation missing repo URL")
+		}
+		return manifest.Scope{Kind: manifest.ScopeKindRepo, Repo: scope.NormalizeRepoURL(target.Repo)}, nil
+	case InstallKindPath:
+		if target.Repo == "" || len(target.Paths) == 0 {
+			return manifest.Scope{}, errors.New("path installation requires repo URL and at least one path")
+		}
+		return manifest.Scope{Kind: manifest.ScopeKindPath, Repo: scope.NormalizeRepoURL(target.Repo), Paths: canonicalPaths(target.Paths)}, nil
+	case InstallKindTeam:
+		if target.Team == "" {
+			return manifest.Scope{}, errors.New("team installation missing team name")
+		}
+		return manifest.Scope{Kind: manifest.ScopeKindTeam, Team: target.Team}, nil
+	case InstallKindUser:
+		if target.User == "" {
+			return manifest.Scope{}, errors.New("user installation missing email")
+		}
+		if manifest.NormalizeEmail(target.User) != actor.Email {
+			return manifest.Scope{}, fmt.Errorf("user-scoped installs may only target the authenticated caller (got %q, actor %q)", target.User, actor.Email)
+		}
+		return manifest.Scope{Kind: manifest.ScopeKindUser, User: target.User}, nil
+	case InstallKindBot:
+		if target.Bot == "" {
+			return manifest.Scope{}, errors.New("bot installation missing bot name")
+		}
+		return manifest.Scope{Kind: manifest.ScopeKindBot, Bot: target.Bot}, nil
+	default:
+		return manifest.Scope{}, fmt.Errorf("unknown installation kind: %q", target.Kind)
+	}
+}
+
+func installScopeMatches(scopeRow, needle manifest.Scope) bool {
+	if scopeRow.Kind != needle.Kind {
+		return false
+	}
+	switch scopeRow.Kind {
+	case manifest.ScopeKindOrg:
+		// Unreachable in practice: an org install is stored as an empty
+		// scope list, never an org scope row, and installTargetScope rejects
+		// InstallKindOrg up front — so an org needle never reaches here. Kept
+		// only for switch exhaustiveness; returns false rather than implying
+		// org scopes are a meaningful thing to match.
+		return false
+	case manifest.ScopeKindRepo:
+		return scope.NormalizeRepoURL(scopeRow.Repo) == scope.NormalizeRepoURL(needle.Repo)
+	case manifest.ScopeKindPath:
+		return scope.NormalizeRepoURL(scopeRow.Repo) == scope.NormalizeRepoURL(needle.Repo) && slices.Equal(canonicalPaths(scopeRow.Paths), canonicalPaths(needle.Paths))
+	case manifest.ScopeKindTeam:
+		return scopeRow.Team == needle.Team
+	case manifest.ScopeKindUser:
+		return manifest.NormalizeEmail(scopeRow.User) == manifest.NormalizeEmail(needle.User)
+	case manifest.ScopeKindBot:
+		return scopeRow.Bot == needle.Bot
+	default:
+		return false
+	}
+}
+
 // commonRecordUsageEvents persists a batch of usage events to
 // .sx/usage/YYYY-MM.jsonl, enriching each with the actor's email if the
 // caller didn't set it.
@@ -826,37 +992,14 @@ func commonRecordUsageEvents(vaultRoot string, actor mgmt.Actor, events []mgmt.U
 	return mgmt.AppendUsageEvents(vaultRoot, events)
 }
 
-// scopeExistsOnAsset returns true when needle is already among scopes,
-// after normalizing the repo URL for repo/path kinds.
+// scopeExistsOnAsset returns true when needle is already among scopes. It
+// shares installScopeMatches' per-kind comparison rules (repo URL / email
+// normalization, canonical path ordering) so set-time dedupe and
+// remove-time matching can never drift apart.
 func scopeExistsOnAsset(scopes []manifest.Scope, needle manifest.Scope) bool {
-	needleRepo := scope.NormalizeRepoURL(needle.Repo)
 	for _, s := range scopes {
-		if s.Kind != needle.Kind {
-			continue
-		}
-		switch s.Kind {
-		case manifest.ScopeKindOrg:
+		if installScopeMatches(s, needle) {
 			return true
-		case manifest.ScopeKindRepo:
-			if scope.NormalizeRepoURL(s.Repo) == needleRepo {
-				return true
-			}
-		case manifest.ScopeKindPath:
-			if scope.NormalizeRepoURL(s.Repo) == needleRepo && slices.Equal(s.Paths, needle.Paths) {
-				return true
-			}
-		case manifest.ScopeKindTeam:
-			if s.Team == needle.Team {
-				return true
-			}
-		case manifest.ScopeKindUser:
-			if manifest.NormalizeEmail(s.User) == manifest.NormalizeEmail(needle.User) {
-				return true
-			}
-		case manifest.ScopeKindBot:
-			if s.Bot == needle.Bot {
-				return true
-			}
 		}
 	}
 	return false

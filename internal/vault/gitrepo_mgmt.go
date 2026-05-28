@@ -255,6 +255,13 @@ func (g *GitVault) SetAssetInstallation(ctx context.Context, assetName string, t
 	})
 }
 
+func (g *GitVault) RemoveAssetInstallation(ctx context.Context, assetName string, target InstallTarget) error {
+	msg := fmt.Sprintf("Uninstall %s from %s", assetName, target.Describe())
+	return g.runInVaultTx(ctx, msg, func(root string, actor mgmt.Actor) error {
+		return commonRemoveAssetInstallation(root, actor, assetName, target)
+	})
+}
+
 func (g *GitVault) ClearAssetInstallations(ctx context.Context, assetName string) error {
 	msg := "Clear installations for " + assetName
 	return g.runInVaultTx(ctx, msg, func(root string, actor mgmt.Actor) error {

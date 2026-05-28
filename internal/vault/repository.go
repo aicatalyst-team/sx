@@ -149,8 +149,29 @@ type Vault interface {
 	// list in sx.toml; Sleuth vaults delegate to the server.
 	SetAssetInstallation(ctx context.Context, assetName string, target InstallTarget) error
 
+	// RemoveAssetInstallation removes one installation target from an
+	// asset. The bot (or team) named by target must exist on every
+	// backend; if it does not, the call returns an error. Beyond that,
+	// file-backed vaults (Git, Path) soft no-op when no install row
+	// references the target. The Sleuth backend additionally errors when
+	// the asset name doesn't resolve, rather than no-opping, and today
+	// only supports InstallKindBot targets — every other kind returns
+	// ErrNotImplemented (file-backed vaults support all kinds). Removing an
+	// InstallKindOrg target is not supported on any backend (an org-wide
+	// install has no scope row to remove) and returns ErrNotImplemented —
+	// remove the asset from the vault to stop distributing a global
+	// install (ClearAssetInstallations no-ops on an empty scope list). For bot and
+	// team targets the bot-exists / team-admin precondition is checked
+	// unconditionally, before the scope walk — so even a no-op removal of
+	// an already-absent row requires the caller to still hold those rights.
+	RemoveAssetInstallation(ctx context.Context, assetName string, target InstallTarget) error
+
 	// ClearAssetInstallations removes every installation target from an
-	// asset. Soft no-op if the asset is absent from the vault.
+	// asset. Soft no-op if the asset is absent from the vault. Unlike
+	// RemoveAssetInstallation — which drops the manifest entry when it
+	// removes the asset's last scope — Clear keeps the (now scope-less)
+	// entry in place, so a later install adds a scope to the existing
+	// entry rather than recreating it.
 	ClearAssetInstallations(ctx context.Context, assetName string) error
 
 	// RecordUsageEvents appends usage events to the vault's persistent
@@ -270,7 +291,13 @@ type SourceHandler interface {
 	Fetch(ctx context.Context, asset *lockfile.Asset) ([]byte, error)
 }
 
-// ListAssetsOptions contains options for listing vault assets
+// DefaultTeamsLimit is the server-side maximum number of teams a single
+// ListTeams query returns. It is the one source of truth for that cap: the
+// Sleuth lookup paths request it, and the pkg/sxvault facade references it
+// so the public "list all teams" surface and the internal lookups can't
+// silently disagree.
+const DefaultTeamsLimit = 300
+
 // ListTeamsOptions controls the ListTeams query.
 type ListTeamsOptions struct {
 	Filter string // Server-side term search (substring match on team name)
@@ -284,6 +311,7 @@ type ListTeamsResult struct {
 	HasMore    bool // True when more teams exist beyond Limit
 }
 
+// ListAssetsOptions contains options for listing vault assets
 type ListAssetsOptions struct {
 	Type   string // Filter by asset type (skill, mcp, etc.)
 	Search string // Search query for filtering assets

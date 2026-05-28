@@ -2,10 +2,15 @@
 //
 // Scope: this facade currently covers the publish / manage write path
 // (OpenSkillsNew / OpenGit / OpenPath constructors; EnsureBot, DeleteBot,
-// PutAgent, PutSkillZip, InstallAssetToBot mutators; ListAssets read-only browse).
-// Read-side primitives that the internal vault.Vault interface supports —
-// GetMetadata, GetAssetByVersion, RemoveAsset, RenameAsset, asset-uninstall —
-// are intentionally NOT re-exported yet and are reserved for a follow-up
+// PutAgent, PutSkillZip, InstallAssetToBot mutators) plus read-only browse
+// and download (ListAssets, GetAssetZip). GetAssetZip is the one narrow
+// read path: it wraps the internal GetMetadata / GetAssetByVersion calls
+// and exposes only the asset type, description, and raw zip bytes through
+// AssetZip. The raw GetMetadata / GetAssetByVersion interfaces, along with
+// the broad mutators the internal vault.Vault supports — RemoveAsset,
+// RenameAsset, and asset-uninstall across kinds beyond bot — remain
+// internal and are NOT re-exported yet (UninstallAssetFromBot is the
+// narrow, bot-only public uninstall form), reserved for a follow-up
 // release once consumer needs are clearer. Library consumers needing them
 // today should treat the absence as a "not yet" rather than a "never."
 package sxvault
@@ -162,7 +167,19 @@ type BotSummary struct {
 	Slug            string
 	Description     string
 	Teams           []string
-	InstalledSkills []string
+	InstalledSkills []BotSkillSummary
+}
+
+type BotSkillSummary struct {
+	Name            string
+	IsDirectInstall bool
+}
+
+type TeamSummary struct {
+	Name         string
+	Description  string
+	MemberCount  int
+	Repositories []string
 }
 
 type BotRuntimeTokenSpec struct {
@@ -185,6 +202,13 @@ type BotRuntimeTokenResult struct {
 // underlying vault does not implement runtime tokens (i.e., any non-skills.new
 // backend). Callers should match with errors.Is to detect this case.
 var ErrBotRuntimeTokensUnsupported = errors.New("sxvault: bot runtime tokens are only supported by skills.new vaults")
+
+// ErrBotNotFound is reported (via errors.Is) when a method that resolves a
+// bot by name — EnsureBot's update path, PutSkillZip's bot pre-check,
+// UninstallAssetFromBot — is given a bot the vault doesn't have. It
+// re-exports the internal sentinel so library consumers can branch on
+// "bot doesn't exist" without string-matching the error message.
+var ErrBotNotFound = mgmt.ErrBotNotFound
 
 type SkillZipSpec struct {
 	Name    string
@@ -210,6 +234,14 @@ type AssetSummary struct {
 	// the underlying vault doesn't track timestamps for an entry.
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type AssetZip struct {
+	Name        string
+	Version     string
+	Type        string
+	Description string
+	Data        []byte
 }
 
 func OpenSkillsNew(serverURL, authToken string) (*Client, error) {
@@ -442,6 +474,9 @@ func (c *Client) validateSkillExists(ctx context.Context, skill string) error {
 	if mErr != nil {
 		return fmt.Errorf("sxvault: reading metadata for %q: %w", skill, mErr)
 	}
+	if meta == nil {
+		return fmt.Errorf("sxvault: metadata for %q@%s was nil", skill, latest)
+	}
 	if meta.Asset.Type.Key != asset.TypeSkill.Key {
 		return fmt.Errorf("sxvault: %q is type %q, not skill", skill, meta.Asset.Type.Key)
 	}
@@ -500,7 +535,7 @@ func (c *Client) PutSkillZip(ctx context.Context, spec SkillZipSpec) error {
 	if spec.BotName != "" {
 		if _, bErr := c.v.GetBot(ctx, spec.BotName); bErr != nil {
 			if errors.Is(bErr, mgmt.ErrBotNotFound) {
-				return fmt.Errorf("sxvault: bot %q not found in vault", spec.BotName)
+				return fmt.Errorf("sxvault: bot %q not found in vault: %w", spec.BotName, ErrBotNotFound)
 			}
 			return fmt.Errorf("sxvault: checking bot %q: %w", spec.BotName, bErr)
 		}
@@ -512,7 +547,9 @@ func (c *Client) PutSkillZip(ctx context.Context, spec SkillZipSpec) error {
 	if spec.BotName == "" {
 		return nil
 	}
-	return c.InstallAssetToBot(ctx, spec.Name, spec.BotName)
+	// ctx is already actor-wrapped above; use the internal form so the wrap
+	// doesn't run twice (mirrors PutAgent).
+	return c.installAssetToBot(ctx, spec.Name, spec.BotName)
 }
 
 func (c *Client) ListBots(ctx context.Context) ([]BotSummary, error) {
@@ -530,10 +567,24 @@ func (c *Client) ListBots(ctx context.Context) ([]BotSummary, error) {
 			Slug:            b.Slug,
 			Description:     b.Description,
 			Teams:           append([]string(nil), b.Teams...),
-			InstalledSkills: append([]string(nil), b.InstalledSkills...),
+			InstalledSkills: botSkillSummaries(b.InstalledSkills),
 		})
 	}
 	return out, nil
+}
+
+func botSkillSummaries(skills []mgmt.BotSkill) []BotSkillSummary {
+	if len(skills) == 0 {
+		return nil
+	}
+	out := make([]BotSkillSummary, 0, len(skills))
+	for _, skill := range skills {
+		out = append(out, BotSkillSummary{
+			Name:            skill.Name,
+			IsDirectInstall: skill.IsDirectInstall,
+		})
+	}
+	return out
 }
 
 // DeleteBot removes the named bot from the vault. File-backed vaults also
@@ -548,6 +599,65 @@ func (c *Client) DeleteBot(ctx context.Context, botName string) error {
 		return errors.New("sxvault: bot name required")
 	}
 	return c.v.DeleteBot(c.actorContext(ctx), botName)
+}
+
+// defaultTeamsLimit is the page size ListTeams requests. It aliases the
+// vault package's canonical server-side maximum so the public "list all
+// teams" surface and the internal lookups share one value. ListTeams
+// surfaces an error rather than silently truncating when a vault exceeds it.
+const defaultTeamsLimit = vault.DefaultTeamsLimit
+
+func (c *Client) ListTeams(ctx context.Context) ([]TeamSummary, error) {
+	if c == nil || c.v == nil {
+		return nil, errors.New("sxvault: nil client")
+	}
+	result, err := c.v.ListTeams(c.actorContext(ctx), vault.ListTeamsOptions{Limit: defaultTeamsLimit})
+	if err != nil {
+		return nil, err
+	}
+	// ListTeams reads as an "all teams" call but the backend caps results at
+	// defaultTeamsLimit. Fail loudly on truncation instead of handing back a
+	// silent partial view — there is no pagination knob on this surface yet.
+	if result.HasMore {
+		return nil, fmt.Errorf("sxvault: vault has more than %d teams; listing that many is not yet supported", defaultTeamsLimit)
+	}
+	out := make([]TeamSummary, 0, len(result.Teams))
+	for _, t := range result.Teams {
+		out = append(out, TeamSummary{
+			Name:         t.Name,
+			Description:  t.Description,
+			MemberCount:  t.MemberCount,
+			Repositories: append([]string(nil), t.Repositories...),
+		})
+	}
+	slices.SortFunc(out, func(a, b TeamSummary) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return out, nil
+}
+
+func (c *Client) AddBotTeam(ctx context.Context, botName, teamName string) error {
+	if c == nil || c.v == nil {
+		return errors.New("sxvault: nil client")
+	}
+	botName = strings.TrimSpace(botName)
+	teamName = strings.TrimSpace(teamName)
+	if botName == "" || teamName == "" {
+		return errors.New("sxvault: bot name and team name are required")
+	}
+	return c.v.AddBotTeam(c.actorContext(ctx), botName, teamName)
+}
+
+func (c *Client) RemoveBotTeam(ctx context.Context, botName, teamName string) error {
+	if c == nil || c.v == nil {
+		return errors.New("sxvault: nil client")
+	}
+	botName = strings.TrimSpace(botName)
+	teamName = strings.TrimSpace(teamName)
+	if botName == "" || teamName == "" {
+		return errors.New("sxvault: bot name and team name are required")
+	}
+	return c.v.RemoveBotTeam(c.actorContext(ctx), botName, teamName)
 }
 
 func (c *Client) CreateBotRuntimeToken(ctx context.Context, spec BotRuntimeTokenSpec) (BotRuntimeTokenResult, error) {
@@ -594,6 +704,21 @@ func (c *Client) InstallAssetToBot(ctx context.Context, assetName, botName strin
 		return errors.New("sxvault: nil client")
 	}
 	return c.installAssetToBot(c.actorContext(ctx), assetName, botName)
+}
+
+func (c *Client) UninstallAssetFromBot(ctx context.Context, assetName, botName string) error {
+	if c == nil || c.v == nil {
+		return errors.New("sxvault: nil client")
+	}
+	assetName = strings.TrimSpace(assetName)
+	botName = strings.TrimSpace(botName)
+	if assetName == "" || botName == "" {
+		return errors.New("sxvault: asset name and bot name are required")
+	}
+	return c.v.RemoveAssetInstallation(c.actorContext(ctx), assetName, vault.InstallTarget{
+		Kind: vault.InstallKindBot,
+		Bot:  botName,
+	})
 }
 
 // installAssetToBot is the actor-wrapped-context internal form. Callers
@@ -660,6 +785,55 @@ func (c *Client) ListAssetsWithOptions(ctx context.Context, opts ListOptions) ([
 		})
 	}
 	return out, nil
+}
+
+// GetAssetZip downloads a single asset version from the vault. It is the
+// only download affordance on the public surface.
+//
+// When version is empty, the highest-semver version is selected; if no
+// version parses as semver, the last entry in the vault's version list is
+// used as a fallback (see highestSemver). The returned AssetZip.Type is the
+// asset type key (e.g. "skill", "agent"), AssetZip.Description comes from the
+// asset metadata, and AssetZip.Data holds the zip bytes exactly as the vault
+// backend stores them.
+func (c *Client) GetAssetZip(ctx context.Context, name, version string) (AssetZip, error) {
+	if c == nil || c.v == nil {
+		return AssetZip{}, errors.New("sxvault: nil client")
+	}
+	name = strings.TrimSpace(name)
+	version = strings.TrimSpace(version)
+	if name == "" {
+		return AssetZip{}, errors.New("sxvault: asset name required")
+	}
+	ctx = c.actorContext(ctx)
+	if version == "" {
+		versions, err := c.v.GetVersionList(ctx, name)
+		if err != nil {
+			return AssetZip{}, fmt.Errorf("sxvault: listing versions for %q: %w", name, err)
+		}
+		if len(versions) == 0 {
+			return AssetZip{}, fmt.Errorf("sxvault: asset %q not found in vault", name)
+		}
+		version = highestSemver(versions)
+	}
+	meta, err := c.v.GetMetadata(ctx, name, version)
+	if err != nil {
+		return AssetZip{}, fmt.Errorf("sxvault: reading metadata for %q@%s: %w", name, version, err)
+	}
+	if meta == nil {
+		return AssetZip{}, fmt.Errorf("sxvault: metadata for %q@%s was nil", name, version)
+	}
+	data, err := c.v.GetAssetByVersion(ctx, name, version)
+	if err != nil {
+		return AssetZip{}, fmt.Errorf("sxvault: reading asset zip for %q@%s: %w", name, version, err)
+	}
+	return AssetZip{
+		Name:        name,
+		Version:     version,
+		Type:        meta.Asset.Type.Key,
+		Description: meta.Asset.Description,
+		Data:        data,
+	}, nil
 }
 
 func (c *Client) addAsset(ctx context.Context, ast *lockfile.Asset, zipData []byte) error {

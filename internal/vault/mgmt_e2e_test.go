@@ -2,6 +2,7 @@ package vault
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -240,6 +241,257 @@ func TestPathVault_TeamUserLifecycleE2E(t *testing.T) {
 	}
 }
 
+// TestPathVault_PathInstall_OrderInsensitive verifies that a path-scoped
+// install can be removed regardless of the order the caller lists the
+// paths in. Set and remove both canonicalize (sort) the path list, so
+// Set(["docs","api"]) is removed by Remove(["api","docs"]).
+func TestPathVault_PathInstall_OrderInsensitive(t *testing.T) {
+	mgmt.ResetActorCache()
+	dir := t.TempDir()
+
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "alice@example.com")
+	runGit(t, dir, "config", "user.name", "Alice")
+
+	if err := manifest.Save(dir, &manifest.Manifest{
+		SchemaVersion: manifest.CurrentSchemaVersion,
+		Assets: []manifest.Asset{
+			{
+				Name:       "my-skill",
+				Version:    "1.0.0",
+				Type:       asset.TypeSkill,
+				SourceHTTP: &manifest.SourceHTTP{URL: "https://example.com/my-skill.zip"},
+				// A baseline repo scope so the asset row survives after the
+				// path scope is removed (a row left with zero scopes is dropped).
+				Scopes: []manifest.Scope{
+					{Kind: manifest.ScopeKindRepo, Repo: "github.com/acme/baseline"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed manifest: %v", err)
+	}
+	v, err := NewPathVault("file://" + dir)
+	if err != nil {
+		t.Fatalf("NewPathVault: %v", err)
+	}
+	ctx := context.Background()
+	repo := "github.com/acme/infra"
+
+	if err := v.SetAssetInstallation(ctx, "my-skill", InstallTarget{
+		Kind:  InstallKindPath,
+		Repo:  repo,
+		Paths: []string{"docs", "api"},
+	}); err != nil {
+		t.Fatalf("SetAssetInstallation: %v", err)
+	}
+
+	// Remove with the paths in the opposite order — must still match the
+	// stored row and drop the scope.
+	if err := v.RemoveAssetInstallation(ctx, "my-skill", InstallTarget{
+		Kind:  InstallKindPath,
+		Repo:  repo,
+		Paths: []string{"api", "docs"},
+	}); err != nil {
+		t.Fatalf("RemoveAssetInstallation: %v", err)
+	}
+
+	m, _, err := manifest.LoadOrMigrate(dir)
+	if err != nil {
+		t.Fatalf("reload manifest: %v", err)
+	}
+	found := m.FindAsset("my-skill")
+	if found == nil {
+		t.Fatal("my-skill missing from manifest")
+	}
+	for _, s := range found.Scopes {
+		if s.Kind == manifest.ScopeKindPath {
+			t.Fatalf("path scope was not removed despite reordered paths: %+v", s)
+		}
+	}
+	// The baseline repo scope must remain — only the path scope is removed.
+	if len(found.Scopes) != 1 || found.Scopes[0].Kind != manifest.ScopeKindRepo {
+		t.Fatalf("expected only the baseline repo scope to remain, got %+v", found.Scopes)
+	}
+}
+
+// TestPathVault_PathInstall_LegacyUnsortedRow verifies a path scope stored
+// in unsorted order — as an older sx version or a hand edit of sx.toml
+// would leave it — is still matched on both set (no duplicate appended) and
+// remove. This exercises the comparison-site canonicalization rather than
+// the in-version round trip.
+func TestPathVault_PathInstall_LegacyUnsortedRow(t *testing.T) {
+	mgmt.ResetActorCache()
+	dir := t.TempDir()
+
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "alice@example.com")
+	runGit(t, dir, "config", "user.name", "Alice")
+
+	repo := "github.com/acme/infra"
+	if err := manifest.Save(dir, &manifest.Manifest{
+		SchemaVersion: manifest.CurrentSchemaVersion,
+		Assets: []manifest.Asset{
+			{
+				Name:       "my-skill",
+				Version:    "1.0.0",
+				Type:       asset.TypeSkill,
+				SourceHTTP: &manifest.SourceHTTP{URL: "https://example.com/my-skill.zip"},
+				// A path scope stored in unsorted order, as a legacy/hand
+				// edit would leave it, plus a baseline so the row survives.
+				Scopes: []manifest.Scope{
+					{Kind: manifest.ScopeKindRepo, Repo: "github.com/acme/baseline"},
+					{Kind: manifest.ScopeKindPath, Repo: repo, Paths: []string{"docs", "api"}},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed manifest: %v", err)
+	}
+	v, err := NewPathVault("file://" + dir)
+	if err != nil {
+		t.Fatalf("NewPathVault: %v", err)
+	}
+	ctx := context.Background()
+
+	// Set with the same paths sorted differently must NOT append a second
+	// row — the legacy unsorted row should be recognized as already present.
+	if err := v.SetAssetInstallation(ctx, "my-skill", InstallTarget{
+		Kind:  InstallKindPath,
+		Repo:  repo,
+		Paths: []string{"api", "docs"},
+	}); err != nil {
+		t.Fatalf("SetAssetInstallation: %v", err)
+	}
+	m, _, err := manifest.LoadOrMigrate(dir)
+	if err != nil {
+		t.Fatalf("reload manifest after set: %v", err)
+	}
+	if pathScopes := countPathScopes(m.FindAsset("my-skill")); pathScopes != 1 {
+		t.Fatalf("expected the legacy row to be deduped (1 path scope), got %d", pathScopes)
+	}
+
+	// Remove with yet another order must match the legacy row and drop it.
+	if err := v.RemoveAssetInstallation(ctx, "my-skill", InstallTarget{
+		Kind:  InstallKindPath,
+		Repo:  repo,
+		Paths: []string{"api", "docs"},
+	}); err != nil {
+		t.Fatalf("RemoveAssetInstallation: %v", err)
+	}
+	m, _, err = manifest.LoadOrMigrate(dir)
+	if err != nil {
+		t.Fatalf("reload manifest after remove: %v", err)
+	}
+	if pathScopes := countPathScopes(m.FindAsset("my-skill")); pathScopes != 0 {
+		t.Fatalf("legacy unsorted path scope was not removed, %d remain", pathScopes)
+	}
+}
+
+// TestPathVault_RemoveOrgInstall_Rejected verifies removing an org-wide
+// install returns ErrNotImplemented rather than silently no-opping — an
+// org install is stored as an empty scope list, so there is no row to
+// match and callers must use ClearAssetInstallations instead.
+func TestPathVault_RemoveOrgInstall_Rejected(t *testing.T) {
+	mgmt.ResetActorCache()
+	dir := t.TempDir()
+
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "alice@example.com")
+	runGit(t, dir, "config", "user.name", "Alice")
+
+	if err := manifest.Save(dir, &manifest.Manifest{
+		SchemaVersion: manifest.CurrentSchemaVersion,
+		Assets: []manifest.Asset{
+			{
+				Name:       "my-skill",
+				Version:    "1.0.0",
+				Type:       asset.TypeSkill,
+				SourceHTTP: &manifest.SourceHTTP{URL: "https://example.com/my-skill.zip"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed manifest: %v", err)
+	}
+	v, err := NewPathVault("file://" + dir)
+	if err != nil {
+		t.Fatalf("NewPathVault: %v", err)
+	}
+	ctx := context.Background()
+
+	err = v.RemoveAssetInstallation(ctx, "my-skill", InstallTarget{Kind: InstallKindOrg})
+	if !errors.Is(err, ErrNotImplemented) {
+		t.Fatalf("RemoveAssetInstallation org = %v, want ErrNotImplemented", err)
+	}
+	// The message must keep explaining how to actually stop distributing a
+	// globally-installed asset, not just return a bare sentinel.
+	if !strings.Contains(err.Error(), "remove the asset") {
+		t.Fatalf("error %q should tell the caller to remove the asset from the vault", err)
+	}
+}
+
+// TestPathVault_RemoveTeamInstall_RequiresAdminEvenOnNoOp pins the
+// documented contract that the team-admin precondition in
+// RemoveAssetInstallation runs unconditionally — before the scope walk
+// decides nothing changed. A non-admin removing a team install that
+// doesn't even exist still gets the admin error, not a silent no-op.
+func TestPathVault_RemoveTeamInstall_RequiresAdminEvenOnNoOp(t *testing.T) {
+	mgmt.ResetActorCache()
+	dir := t.TempDir()
+
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "alice@example.com")
+	runGit(t, dir, "config", "user.name", "Alice")
+
+	if err := manifest.Save(dir, &manifest.Manifest{
+		SchemaVersion: manifest.CurrentSchemaVersion,
+		Assets: []manifest.Asset{
+			{
+				Name:       "my-skill",
+				Version:    "1.0.0",
+				Type:       asset.TypeSkill,
+				SourceHTTP: &manifest.SourceHTTP{URL: "https://example.com/my-skill.zip"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed manifest: %v", err)
+	}
+	v, err := NewPathVault("file://" + dir)
+	if err != nil {
+		t.Fatalf("NewPathVault: %v", err)
+	}
+	ctx := context.Background()
+
+	// Team whose only admin is bob — the caller (alice) is not an admin.
+	if err := v.CreateTeam(ctx, mgmt.Team{
+		Name:    "platform",
+		Members: []string{"bob@example.com"},
+		Admins:  []string{"bob@example.com"},
+	}); err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+
+	// my-skill has no team install, so the scope walk would no-op — but the
+	// admin check must still fire first and reject the non-admin caller.
+	err = v.RemoveAssetInstallation(ctx, "my-skill", InstallTarget{Kind: InstallKindTeam, Team: "platform"})
+	if err == nil || !strings.Contains(err.Error(), "not an admin") {
+		t.Fatalf("RemoveAssetInstallation by non-admin = %v, want team-admin error", err)
+	}
+}
+
+func countPathScopes(a *manifest.Asset) int {
+	if a == nil {
+		return 0
+	}
+	n := 0
+	for _, s := range a.Scopes {
+		if s.Kind == manifest.ScopeKindPath {
+			n++
+		}
+	}
+	return n
+}
+
 // TestPathVault_BotUpdate_PreservesTeams pins the contract that a
 // description-only update (Teams = nil) leaves existing team
 // memberships intact. The CLI's newBotUpdateCommand sets Teams to nil
@@ -452,7 +704,11 @@ func TestPathVault_BotLifecycleE2E(t *testing.T) {
 	// The helper returns InstalledSkills sorted, so pin the exact set so a
 	// future regression that adds duplicates or includes other-bot/user
 	// skills is caught — not just the contains/not-contains pattern.
-	wantSkills := []string{"direct", "global", "team-only"}
+	wantSkills := []mgmt.BotSkill{
+		{Name: "direct", IsDirectInstall: true},
+		{Name: "global", IsDirectInstall: false},
+		{Name: "team-only", IsDirectInstall: false},
+	}
 	if !slices.Equal(bots[0].InstalledSkills, wantSkills) {
 		t.Errorf("bot[0].InstalledSkills = %v, want %v", bots[0].InstalledSkills, wantSkills)
 	}

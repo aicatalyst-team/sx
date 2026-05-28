@@ -43,7 +43,8 @@ conditions hold. `--since` accepts `Nd` (days) or `all`.
 | `bot.team_added` | `bot` | bot name | `team` |
 | `bot.team_removed` | `bot` | bot name | `team`, optional `reason` (e.g. `team_deleted`) |
 | `install.set` | `installation` | asset name | `kind`, plus one of `repo`/`paths`/`team`/`user`/`bot` |
-| `install.cleared` | `installation` | asset name | `kind`, `reason` (e.g. `team_deleted`, `bot_deleted`) |
+| `install.removed` | `installation` | asset name | `kind`, plus one of `repo`/`paths`/`team`/`user`/`bot` (one specific target was removed) |
+| `install.cleared` | `installation` | asset name | every install row was cleared. `Data` is set only on the cascade paths (`kind`, `team`/`bot`, `reason` = `team_deleted`/`bot_deleted`); a direct `ClearAssetInstallations` call carries no `data` |
 
 Cascade events are emitted automatically:
 
