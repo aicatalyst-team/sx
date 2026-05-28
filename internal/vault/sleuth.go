@@ -262,20 +262,27 @@ func (s *SleuthVault) AddAssetWithResult(ctx context.Context, asset *lockfile.As
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		if uploadResp.Error != "" {
-			// Check for version conflict error
-			if strings.Contains(uploadResp.Error, "already exists") {
-				return AddAssetResult{}, &ErrVersionExists{
-					Name:    asset.Name,
-					Version: asset.Version,
-					// Server-persisted slug, when the conflict response
-					// carries it — lets a re-publish route follow-up
-					// operations to the uploaded asset rather than a
-					// different one sharing the requested name.
-					Slug:    uploadResp.Asset.Name,
-					Message: uploadResp.Error,
-				}
+		// HTTP 409 is the protocol-level version-conflict signal; the error
+		// string is a UI message and may be reworded. Treat the status as
+		// authoritative and keep the substring check as a fallback for
+		// servers that surface the conflict under a different status.
+		if resp.StatusCode == http.StatusConflict || strings.Contains(uploadResp.Error, "already exists") {
+			message := uploadResp.Error
+			if message == "" {
+				message = fmt.Sprintf("version %s already exists for asset %s", asset.Version, asset.Name)
 			}
+			return AddAssetResult{}, &ErrVersionExists{
+				Name:    asset.Name,
+				Version: asset.Version,
+				// Server-persisted slug, when the conflict response
+				// carries it — lets a re-publish route follow-up
+				// operations to the uploaded asset rather than a
+				// different one sharing the requested name.
+				Slug:    uploadResp.Asset.Name,
+				Message: message,
+			}
+		}
+		if uploadResp.Error != "" {
 			return AddAssetResult{}, errors.New(uploadResp.Error)
 		}
 		return AddAssetResult{}, fmt.Errorf("HTTP %d", resp.StatusCode)

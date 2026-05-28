@@ -3,6 +3,7 @@ package vault
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -598,6 +599,37 @@ func TestSleuthVault_InstallSkillToBot_PrefersSlugOverName(t *testing.T) {
 	v := NewSleuthVault(srv.URL, "test-token")
 	if err := v.SetAssetInstallation(context.Background(), "fix-pr", InstallTarget{Kind: InstallKindBot, Bot: "testers"}); err != nil {
 		t.Fatalf("SetAssetInstallation: %v", err)
+	}
+}
+
+// TestSleuthVault_AddAsset_ConflictByStatusCarriesSlug verifies that an
+// HTTP 409 is treated as a version conflict even when the error message is
+// reworded (not containing "already exists"), and that the persisted slug
+// from the response propagates onto ErrVersionExists.
+func TestSleuthVault_AddAsset_ConflictByStatusCarriesSlug(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/skills/assets" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": false,
+			"error":   "duplicate version", // reworded — no "already exists"
+			"asset":   map[string]any{"name": "foo_skill", "version": "1"},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	_, err := v.AddAssetWithResult(context.Background(), &lockfile.Asset{Name: "foo", Version: "1"}, []byte("zip"))
+	var exists *ErrVersionExists
+	if !errors.As(err, &exists) {
+		t.Fatalf("AddAssetWithResult err = %v, want ErrVersionExists", err)
+	}
+	if exists.Slug != "foo_skill" {
+		t.Fatalf("ErrVersionExists.Slug = %q, want foo_skill", exists.Slug)
 	}
 }
 

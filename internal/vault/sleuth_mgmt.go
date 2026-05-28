@@ -574,13 +574,17 @@ func (s *SleuthVault) RemoveBotTeam(ctx context.Context, botName, teamName strin
 	if !slices.Contains(bot.Teams, teamName) {
 		return nil
 	}
-	out := bot.Teams[:0]
+	// Build a fresh slice rather than reslicing bot.Teams in place, so we
+	// never mutate the backing array GetBot handed us (which a future cached
+	// GetBot could share). Stays non-nil empty when the last team is removed,
+	// so UpdateBot still emits teamIds: [].
+	remaining := make([]string, 0, len(bot.Teams))
 	for _, t := range bot.Teams {
 		if t != teamName {
-			out = append(out, t)
+			remaining = append(remaining, t)
 		}
 	}
-	bot.Teams = out
+	bot.Teams = remaining
 	return s.UpdateBot(ctx, *bot)
 }
 
