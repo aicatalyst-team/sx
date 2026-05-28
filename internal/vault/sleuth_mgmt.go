@@ -110,7 +110,7 @@ func gqlTeamNodeToSleuthNode(n vaultgql.ListTeamsOrganizationOrganizationTypeTea
 }
 
 func (s *SleuthVault) GetTeam(ctx context.Context, name string) (*mgmt.Team, error) {
-	result, err := s.ListTeams(ctx, ListTeamsOptions{Filter: name, Limit: 300})
+	result, err := s.ListTeams(ctx, ListTeamsOptions{Filter: name, Limit: sleuthTeamLookupPageSize})
 	if err != nil {
 		return nil, err
 	}

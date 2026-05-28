@@ -154,7 +154,9 @@ type Vault interface {
 	// backend; if it does not, the call returns an error. Beyond that,
 	// file-backed vaults (Git, Path) soft no-op when no install row
 	// references the target. The Sleuth backend additionally errors when
-	// the asset name doesn't resolve, rather than no-opping.
+	// the asset name doesn't resolve, rather than no-opping, and today
+	// only supports InstallKindBot targets — every other kind returns
+	// ErrNotImplemented (file-backed vaults support all kinds).
 	RemoveAssetInstallation(ctx context.Context, assetName string, target InstallTarget) error
 
 	// ClearAssetInstallations removes every installation target from an
