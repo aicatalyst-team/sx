@@ -449,13 +449,12 @@ func TestPathVault_BotLifecycleE2E(t *testing.T) {
 	if len(bots) != 1 {
 		t.Fatalf("ListBots returned %d bots, want 1", len(bots))
 	}
-	for _, name := range []string{"direct", "team-only", "global"} {
-		if !slices.Contains(bots[0].InstalledSkills, name) {
-			t.Errorf("bot summary missing resolved skill %s: %v", name, bots[0].InstalledSkills)
-		}
-	}
-	if slices.Contains(bots[0].InstalledSkills, "user-only") {
-		t.Errorf("bot summary should not include user-only skill: %v", bots[0].InstalledSkills)
+	// The helper returns InstalledSkills sorted, so pin the exact set so a
+	// future regression that adds duplicates or includes other-bot/user
+	// skills is caught — not just the contains/not-contains pattern.
+	wantSkills := []string{"direct", "global", "team-only"}
+	if !slices.Equal(bots[0].InstalledSkills, wantSkills) {
+		t.Errorf("bot[0].InstalledSkills = %v, want %v", bots[0].InstalledSkills, wantSkills)
 	}
 
 	// 4. Resolve the lock file as the bot identity (SX_BOT).

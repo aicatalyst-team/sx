@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/sleuth-io/sx/internal/git"
 )
@@ -32,7 +33,7 @@ func TestGitPutAgentWritesSXVaultFormat(t *testing.T) {
 
 	clone := cloneRemote(t, remote)
 	agentPath := filepath.Join(clone, "assets", "reviewer", "1.0.0", "AGENT.md")
-	assertFileContains(t, agentPath, "---\nname: reviewer\ndescription: Reviews pull requests.\n---")
+	assertFileContains(t, agentPath, "---\nname: reviewer\ndescription: \"Reviews pull requests.\"\n---")
 	assertFileContains(t, agentPath, "You are Reviewer.")
 	assertFileContains(t, filepath.Join(clone, "assets", "reviewer", "1.0.0", "metadata.toml"), `type = "agent"`)
 	manifest := readFile(t, filepath.Join(clone, "sx.toml"))
@@ -54,6 +55,67 @@ func TestAgentMarkdownPreservesExistingFrontmatter(t *testing.T) {
 	}
 	if !strings.Contains(got, "name: custom-reviewer") {
 		t.Fatalf("agentMarkdown did not preserve supplied frontmatter:\n%s", got)
+	}
+}
+
+// TestAgentMarkdownWrapsPromptStartingWithHorizontalRule covers a prompt
+// that opens with a markdown horizontal rule (---) but has no closing
+// frontmatter terminator. The wrapper must still inject name+description
+// frontmatter rather than treating the leading --- as existing frontmatter.
+func TestAgentMarkdownWrapsPromptStartingWithHorizontalRule(t *testing.T) {
+	got := agentMarkdown(AgentSpec{
+		AssetName:   "reviewer",
+		Description: "Reviews PRs.",
+		Prompt:      "---\n\nThis is a body that starts with a horizontal rule.",
+	})
+	if !strings.HasPrefix(got, "---\nname: reviewer\ndescription: \"Reviews PRs.\"\n---\n\n") {
+		t.Fatalf("agentMarkdown did not inject frontmatter:\n%s", got)
+	}
+}
+
+// TestAgentFrontmatterDescriptionEscapesYAMLSpecials guards against
+// descriptions whose raw value would yield invalid YAML if pasted
+// unquoted into the frontmatter (colon-space, leading dash, quote, etc).
+func TestAgentFrontmatterDescriptionEscapesYAMLSpecials(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "colon-space", input: "Reviews: handles PRs", want: `"Reviews: handles PRs"`},
+		{name: "leading dash", input: "- starts with dash", want: `"- starts with dash"`},
+		{name: "double quote", input: `she said "hi"`, want: `"she said \"hi\""`},
+		{name: "backslash", input: `path\to\thing`, want: `"path\\to\\thing"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := agentFrontmatterDescription(tc.input); got != tc.want {
+				t.Fatalf("agentFrontmatterDescription(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAgentFrontmatterDescriptionTruncatesByRune guards against splitting
+// a multi-byte UTF-8 sequence when the description exceeds the 1024-rune
+// limit. A 1024-rune cap of 4-byte runes is ~4096 bytes; truncation must
+// happen on a rune boundary so the result is valid UTF-8.
+func TestAgentFrontmatterDescriptionTruncatesByRune(t *testing.T) {
+	// Build a 2000-rune string using a 4-byte rune (😀) so byte-truncation
+	// at 1024 would cleave a rune in half.
+	const rune4Byte = "😀"
+	long := strings.Repeat(rune4Byte, 2000)
+	got := agentFrontmatterDescription(long)
+	// Strip the wrapping quotes that yamlQuote adds.
+	if !strings.HasPrefix(got, `"`) || !strings.HasSuffix(got, `"`) {
+		t.Fatalf("expected quoted scalar, got %q", got)
+	}
+	inner := got[1 : len(got)-1]
+	if !utf8.ValidString(inner) {
+		t.Fatalf("truncated description is not valid UTF-8")
+	}
+	if got := utf8.RuneCountInString(inner); got != 1024 {
+		t.Fatalf("rune count after truncation = %d, want 1024", got)
 	}
 }
 

@@ -575,6 +575,11 @@ func (s *SleuthVault) resolveTeamGIDs(ctx context.Context, names []string) ([]st
 // assetGIDByName resolves an asset display name or slug to its server GID via
 // the vault assets search. ListAssets exposes slugs for Sleuth assets, while
 // older callers may still pass display names; bot install accepts both.
+//
+// Slugs are unique and stable, so we prefer slug matches over display-name
+// matches. If both a slug and a display-name match exist for different
+// assets, we return an ambiguity error rather than silently picking one
+// based on server ordering.
 func (s *SleuthVault) assetGIDByName(ctx context.Context, name string) (string, error) {
 	resp, err := vaultgql.AssetGID(ctx, s.gqlClient(), name)
 	if err != nil {
@@ -584,10 +589,23 @@ func (s *SleuthVault) assetGIDByName(ctx context.Context, name string) (string, 
 	// (Skill, MCP, Agent, ClaudeCodePlugin, ...). Use the interface
 	// getters to avoid switching on every variant.
 	name = strings.TrimSpace(name)
+	var slugMatch, nameMatch string
 	for _, n := range resp.Vault.Assets.Nodes {
-		if n.GetName() == name || n.GetSlug() == name {
-			return n.GetId(), nil
+		if n.GetSlug() == name && slugMatch == "" {
+			slugMatch = n.GetId()
 		}
+		if n.GetName() == name && n.GetSlug() != name && nameMatch == "" {
+			nameMatch = n.GetId()
+		}
+	}
+	if slugMatch != "" && nameMatch != "" {
+		return "", fmt.Errorf("asset %q is ambiguous: matches both a slug and a different display name", name)
+	}
+	if slugMatch != "" {
+		return slugMatch, nil
+	}
+	if nameMatch != "" {
+		return nameMatch, nil
 	}
 	return "", fmt.Errorf("asset %q not found", name)
 }

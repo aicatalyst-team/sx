@@ -15,8 +15,10 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Masterminds/semver/v3"
 
@@ -700,12 +702,23 @@ func agentZip(spec AgentSpec) ([]byte, error) {
 
 func agentMarkdown(spec AgentSpec) string {
 	prompt := strings.TrimSpace(spec.Prompt)
-	if strings.HasPrefix(prompt, "---") {
+	if hasFrontmatter(prompt) {
 		return prompt + "\n"
 	}
 	name := agentFrontmatterName(spec.AssetName)
 	description := agentFrontmatterDescription(spec.Description, spec.BotDescription, spec.AssetName)
 	return "---\nname: " + name + "\ndescription: " + description + "\n---\n\n" + prompt + "\n"
+}
+
+// hasFrontmatter reports whether s already begins with a YAML frontmatter
+// block (a leading line of exactly --- and a later closing line of exactly
+// ---), as opposed to merely starting with a markdown horizontal rule.
+func hasFrontmatter(s string) bool {
+	lines := strings.Split(s, "\n")
+	if len(lines) < 2 || lines[0] != "---" {
+		return false
+	}
+	return slices.Contains(lines[1:], "---")
 }
 
 func agentFrontmatterName(name string) string {
@@ -740,12 +753,22 @@ func agentFrontmatterDescription(values ...string) string {
 		if value == "" {
 			continue
 		}
-		if len(value) > 1024 {
-			value = value[:1024]
+		if utf8.RuneCountInString(value) > 1024 {
+			runes := []rune(value)
+			value = string(runes[:1024])
 		}
-		return value
+		return yamlQuote(value)
 	}
-	return "Custom agent"
+	return yamlQuote("Custom agent")
+}
+
+// yamlQuote wraps a string in YAML double-quoted scalar form, escaping
+// backslashes and double quotes. This is always-safe: callers don't need
+// to think about colons, leading dashes, or other YAML-special chars.
+func yamlQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return `"` + s + `"`
 }
 
 func normalizeSkillZip(spec SkillZipSpec) ([]byte, error) {
