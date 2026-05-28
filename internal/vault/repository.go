@@ -150,11 +150,11 @@ type Vault interface {
 	SetAssetInstallation(ctx context.Context, assetName string, target InstallTarget) error
 
 	// RemoveAssetInstallation removes one installation target from an
-	// asset. On file-backed vaults (Git, Path) a missing asset or missing
-	// target row is a soft no-op. The Sleuth backend resolves the bot and
-	// asset by name first, so it returns an error when either does not
-	// exist rather than no-opping — callers needing uniform behaviour
-	// across backends should not rely on the soft no-op for absent rows.
+	// asset. The bot (or team) named by target must exist on every
+	// backend; if it does not, the call returns an error. Beyond that,
+	// file-backed vaults (Git, Path) soft no-op when no install row
+	// references the target. The Sleuth backend additionally errors when
+	// the asset name doesn't resolve, rather than no-opping.
 	RemoveAssetInstallation(ctx context.Context, assetName string, target InstallTarget) error
 
 	// ClearAssetInstallations removes every installation target from an
