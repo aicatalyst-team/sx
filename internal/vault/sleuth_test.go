@@ -485,7 +485,7 @@ func TestSleuthVault_InstallSkillToBot_SlugMatchOrderIndependent(t *testing.T) {
 	}
 }
 
-func TestSleuthVault_InstallSkillToBotPrefersGeneratedSkillSlugNameMatch(t *testing.T) {
+func TestSleuthVault_InstallSkillToBotPrefersExactSlug(t *testing.T) {
 	srv, _ := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
 		"ListBots": func(vars map[string]any) any {
 			return map[string]any{
@@ -523,8 +523,8 @@ func TestSleuthVault_InstallSkillToBotPrefersGeneratedSkillSlugNameMatch(t *test
 			}
 		},
 		"InstallSkillToBot": func(vars map[string]any) any {
-			if got := vars["skillId"]; got != "uploaded-skill" {
-				t.Fatalf("InstallSkillToBot skillId = %v, want uploaded-skill", got)
+			if got := vars["skillId"]; got != "slug-asset" {
+				t.Fatalf("InstallSkillToBot skillId = %v, want slug-asset", got)
 			}
 			return map[string]any{
 				"installSkillToBot": map[string]any{
@@ -541,12 +541,11 @@ func TestSleuthVault_InstallSkillToBotPrefersGeneratedSkillSlugNameMatch(t *test
 	}
 }
 
-// TestSleuthVault_InstallSkillToBot_AmbiguousMatchErrors covers the case
+// TestSleuthVault_InstallSkillToBot_PrefersSlugOverName covers the case
 // where the asset-search response contains both a slug-matching asset and
-// a *different* display-name-matching asset. Without ambiguity detection,
-// either could be returned depending on server ordering — instead the
-// install must surface a clear error.
-func TestSleuthVault_InstallSkillToBot_AmbiguousMatchErrors(t *testing.T) {
+// a *different* display-name-matching asset. The exact slug wins because
+// slugs are unique and are what SX exposes from list and upload calls.
+func TestSleuthVault_InstallSkillToBot_PrefersSlugOverName(t *testing.T) {
 	srv, _ := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
 		"ListBots": func(vars map[string]any) any {
 			return map[string]any{
@@ -583,15 +582,22 @@ func TestSleuthVault_InstallSkillToBot_AmbiguousMatchErrors(t *testing.T) {
 				},
 			}
 		},
+		"InstallSkillToBot": func(vars map[string]any) any {
+			if got := vars["skillId"]; got != "slug-asset" {
+				t.Fatalf("InstallSkillToBot skillId = %v, want slug-asset", got)
+			}
+			return map[string]any{
+				"installSkillToBot": map[string]any{
+					"success": true,
+					"errors":  []any{},
+				},
+			}
+		},
 	})
 
 	v := NewSleuthVault(srv.URL, "test-token")
-	err := v.SetAssetInstallation(context.Background(), "fix-pr", InstallTarget{Kind: InstallKindBot, Bot: "testers"})
-	if err == nil {
-		t.Fatalf("expected ambiguity error, got nil")
-	}
-	if !strings.Contains(err.Error(), "ambiguous") {
-		t.Fatalf("expected ambiguity error, got: %v", err)
+	if err := v.SetAssetInstallation(context.Background(), "fix-pr", InstallTarget{Kind: InstallKindBot, Bot: "testers"}); err != nil {
+		t.Fatalf("SetAssetInstallation: %v", err)
 	}
 }
 

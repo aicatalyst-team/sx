@@ -613,10 +613,10 @@ func (s *SleuthVault) resolveTeamGIDs(ctx context.Context, names []string) ([]st
 // the vault assets search. ListAssets exposes slugs for Sleuth assets, while
 // older callers may still pass display names; bot install accepts both.
 //
-// Slugs are unique and stable, so we prefer slug matches over display-name
-// matches. If both a slug and a display-name match exist for different
-// assets, we return an ambiguity error rather than silently picking one
-// based on server ordering.
+// Slugs are unique and stable, so an exact slug match wins over display-name
+// matches from other assets. ListAssets and upload responses both return
+// slugs, so callers using the public API must be able to pass that value
+// back here without being blocked by another asset's display name.
 func (s *SleuthVault) assetGIDByName(ctx context.Context, name string) (string, error) {
 	resp, err := vaultgql.AssetGID(ctx, s.gqlClient(), name)
 	if err != nil {
@@ -635,12 +635,6 @@ func (s *SleuthVault) assetGIDByName(ctx context.Context, name string) (string, 
 			nameMatch = &assetIDMatch{id: n.GetId(), slug: n.GetSlug()}
 		}
 	}
-	if slugMatch != nil && nameMatch != nil {
-		if isGeneratedSkillSlug(name, nameMatch.slug) {
-			return nameMatch.id, nil
-		}
-		return "", fmt.Errorf("asset %q is ambiguous: matches both a slug and a different display name", name)
-	}
 	if slugMatch != nil {
 		return slugMatch.id, nil
 	}
@@ -653,10 +647,6 @@ func (s *SleuthVault) assetGIDByName(ctx context.Context, name string) (string, 
 type assetIDMatch struct {
 	id   string
 	slug string
-}
-
-func isGeneratedSkillSlug(name, slug string) bool {
-	return slug == name+"_skill"
 }
 
 // installSkillToBot installs an asset directly to a bot via the existing
