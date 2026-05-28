@@ -420,6 +420,12 @@ func (c *Client) ensureBot(ctx context.Context, bot Bot) (string, error) {
 // is idempotent, so the caller should retry the same PutAgent call to
 // converge — the asset upload no-ops on version match and the install path
 // is an upsert.
+//
+// Unlike PutSkillZip there is no PutAgentWithResult: the persisted agent
+// slug and the upload's IsFirstVersion flag are consumed internally (the
+// latter to clear the default org install before the bot install) but are
+// not surfaced to callers yet. Add a WithResult variant if a consumer needs
+// that observability.
 func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, error) {
 	if c == nil || c.v == nil {
 		return AgentResult{}, errors.New("sxvault: nil client")
@@ -460,6 +466,15 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 	agentName := strings.TrimSpace(upload.Name)
 	if agentName == "" {
 		agentName = spec.AssetName
+	}
+	// Mirror PutSkillZip: on a brand-new asset the Sleuth upload applies a
+	// default org-wide install, but an agent is always bot-targeted, so strip
+	// that default before the bot install lands. IsFirstVersion is Sleuth-only
+	// (git/local leave it false), so this is a no-op for those backends.
+	if upload.IsFirstVersion {
+		if err := c.v.ClearAssetInstallations(ctx, agentName); err != nil {
+			return AgentResult{}, fmt.Errorf("sxvault: clearing default installations for %q: %w", agentName, err)
+		}
 	}
 	if err := c.installAssetToBot(ctx, agentName, spec.BotName); err != nil {
 		return AgentResult{}, err

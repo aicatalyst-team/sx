@@ -25,10 +25,12 @@ var ErrNotImplemented = errors.New("operation not supported for this vault type"
 type ErrVersionExists struct {
 	Name    string
 	Version string
-	// Slug is the server-persisted slug of the conflicting asset, when the
-	// backend reports it. Empty when unknown. Callers re-publishing a
+	// Slug is the server-persisted slug of the conflicting asset. Only the
+	// Sleuth vault populates it (from the upload-conflict response); the
+	// Git and Path vaults always leave it empty. Callers re-publishing a
 	// collision-resolved upload should prefer this over the requested Name
-	// so follow-up operations target the uploaded asset, not a same-named one.
+	// when non-empty, so follow-up operations target the uploaded asset and
+	// not a same-named one — and must handle the empty case for other vaults.
 	Slug    string
 	Message string
 }

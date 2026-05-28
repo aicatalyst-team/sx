@@ -626,11 +626,11 @@ func (s *SleuthVault) assetGIDByName(ctx context.Context, name string) (string, 
 	// (Skill, MCP, Agent, ClaudeCodePlugin, ...). Use the interface
 	// getters to avoid switching on every variant.
 	name = strings.TrimSpace(name)
-	var slugMatch *assetIDMatch
+	var slugMatchID string
 	var nameMatches []assetIDMatch
 	for _, n := range resp.Vault.Assets.Nodes {
-		if n.GetSlug() == name && slugMatch == nil {
-			slugMatch = &assetIDMatch{id: n.GetId(), slug: n.GetSlug()}
+		if n.GetSlug() == name && slugMatchID == "" {
+			slugMatchID = n.GetId()
 		}
 		if n.GetName() == name && n.GetSlug() != name {
 			nameMatches = appendDistinctAssetMatch(nameMatches, assetIDMatch{id: n.GetId(), slug: n.GetSlug()})
@@ -638,8 +638,8 @@ func (s *SleuthVault) assetGIDByName(ctx context.Context, name string) (string, 
 	}
 	// An exact slug match is unambiguous — slugs are unique and are what
 	// ListAssets / upload responses hand back — so it always wins.
-	if slugMatch != nil {
-		return slugMatch.id, nil
+	if slugMatchID != "" {
+		return slugMatchID, nil
 	}
 	switch len(nameMatches) {
 	case 0:

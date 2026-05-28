@@ -398,6 +398,113 @@ func TestPutSkillZipWithBotClearsDefaultUploadInstall(t *testing.T) {
 	}
 }
 
+// TestPutAgentClearsDefaultUploadInstallOnFirstVersion verifies PutAgent
+// mirrors PutSkillZip: a brand-new (first-version) agent upload strips the
+// server's default org-wide install before the bot install, so the agent
+// lands only on its bot.
+func TestPutAgentClearsDefaultUploadInstallOnFirstVersion(t *testing.T) {
+	ctx := context.Background()
+	var clearedAsset string
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/skills/assets":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"asset": map[string]any{
+					"name":             "my-agent_agent",
+					"version":          "1",
+					"url":              srv.URL + "/api/skills/assets/my-agent_agent/1/archive.zip",
+					"is_first_version": true,
+				},
+			})
+		case "/graphql":
+			var req struct {
+				OperationName string         `json:"operationName"`
+				Variables     map[string]any `json:"variables"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if req.OperationName == "RemoveAssetInstallations" {
+				input, _ := req.Variables["input"].(map[string]any)
+				clearedAsset, _ = input["assetName"].(string)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": sxvaultAgentGraphQLResponse(t, req.OperationName, req.Variables)})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := OpenSkillsNew(srv.URL, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.PutAgent(ctx, AgentSpec{
+		BotName:   "reviewer",
+		AssetName: "my-agent",
+		Version:   "1",
+		Prompt:    "You are an agent.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if clearedAsset != "my-agent_agent" {
+		t.Fatalf("ClearAssetInstallations asset = %q, want server slug my-agent_agent", clearedAsset)
+	}
+}
+
+func sxvaultAgentGraphQLResponse(t *testing.T, operation string, vars map[string]any) any {
+	t.Helper()
+	switch operation {
+	case "ListBots":
+		return map[string]any{
+			"bots": []any{
+				map[string]any{
+					"id":              "bot-1",
+					"name":            "reviewer",
+					"slug":            "reviewer",
+					"description":     "Reviews PRs",
+					"teams":           []any{},
+					"installedSkills": []any{},
+				},
+			},
+		}
+	case "BotInstalled":
+		return map[string]any{"bot": map[string]any{"installedSkills": []any{}}}
+	case "RemoveAssetInstallations":
+		return map[string]any{
+			"removeAssetInstallations": map[string]any{"success": true, "errors": []any{}},
+		}
+	case "AssetGID":
+		return map[string]any{
+			"vault": map[string]any{
+				"assets": map[string]any{
+					"nodes": []any{
+						map[string]any{
+							"__typename": "Agent",
+							"id":         "agent-1",
+							"name":       "My Agent",
+							"slug":       "my-agent_agent",
+						},
+					},
+				},
+			},
+		}
+	case "InstallSkillToBot":
+		return map[string]any{
+			"installSkillToBot": map[string]any{"success": true, "errors": []any{}},
+		}
+	default:
+		t.Fatalf("unexpected GraphQL operation %q", operation)
+		return nil
+	}
+}
+
 // TestPutSkillZipRepublishRoutesBotInstallToServerSlug pins the fix for the
 // re-publish case: when the upload conflicts (version already exists) the
 // server returns no fresh asset result, but if the conflict response carries
