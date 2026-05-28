@@ -287,6 +287,54 @@ func TestPutSkillZipSameVersionIsIdempotent(t *testing.T) {
 	assertFileContains(t, filepath.Join(clone, "assets", "lint-helper", "1.0.0", "SKILL.md"), "Lint carefully.")
 }
 
+func TestPutSkillZipWithResultReturnsServerAssetName(t *testing.T) {
+	ctx := context.Background()
+	var postedName string
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/skills/assets" {
+			http.Error(w, "unexpected request", http.StatusNotFound)
+			return
+		}
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		postedName = r.FormValue("name")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"asset": map[string]any{
+				"name":    "architecture-blueprint-generator_skill",
+				"version": "1",
+				"url":     srv.URL + "/api/skills/assets/architecture-blueprint-generator_skill/1/archive.zip",
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := OpenSkillsNew(srv.URL, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.PutSkillZipWithResult(ctx, SkillZipSpec{
+		Name:        "architecture-blueprint-generator",
+		Version:     "1",
+		Description: "Creates architecture blueprints.",
+		ZipData:     skillZip(t, "Create architecture blueprints."),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if postedName != "architecture-blueprint-generator" {
+		t.Fatalf("posted name = %q, want architecture-blueprint-generator", postedName)
+	}
+	if got.Name != "architecture-blueprint-generator_skill" || got.Version != "1" {
+		t.Fatalf("PutSkillZipWithResult = %+v, want server-returned name and version", got)
+	}
+}
+
 func TestPutSkillZipDescriptionPrecedence(t *testing.T) {
 	ctx := context.Background()
 	remote, client := newGitVaultClient(t)

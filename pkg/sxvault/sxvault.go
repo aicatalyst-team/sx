@@ -223,6 +223,14 @@ type SkillZipSpec struct {
 	BotName string
 }
 
+// SkillZipResult contains the persisted skill identity after PutSkillZip.
+// Server-backed vaults may normalize spec.Name into a slug; use Name for
+// follow-up install/uninstall calls against the same vault.
+type SkillZipResult struct {
+	Name    string
+	Version string
+}
+
 type AssetSummary struct {
 	Name          string
 	Type          string
@@ -441,10 +449,15 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 		return AgentResult{}, err
 	}
 	ast := &lockfile.Asset{Name: spec.AssetName, Version: spec.Version, Type: asset.TypeAgent}
-	if err := c.addAsset(ctx, ast, zipData); err != nil {
+	upload, err := c.addAssetWithResult(ctx, ast, zipData)
+	if err != nil {
 		return AgentResult{}, err
 	}
-	if err := c.installAssetToBot(ctx, spec.AssetName, spec.BotName); err != nil {
+	agentName := strings.TrimSpace(upload.Name)
+	if agentName == "" {
+		agentName = spec.AssetName
+	}
+	if err := c.installAssetToBot(ctx, agentName, spec.BotName); err != nil {
 		return AgentResult{}, err
 	}
 	for _, skill := range skills {
@@ -514,18 +527,27 @@ func highestSemver(versions []string) string {
 // the stored bytes. Bump the version when you need a guaranteed update
 // across all backends.
 func (c *Client) PutSkillZip(ctx context.Context, spec SkillZipSpec) error {
+	_, err := c.PutSkillZipWithResult(ctx, spec)
+	return err
+}
+
+// PutSkillZipWithResult uploads a skill zip and returns the persisted skill
+// identity from the backing vault. For Skills.new this is the server-returned
+// slug, which may differ from spec.Name when the uploaded display name collides
+// with an existing asset slug.
+func (c *Client) PutSkillZipWithResult(ctx context.Context, spec SkillZipSpec) (SkillZipResult, error) {
 	if c == nil || c.v == nil {
-		return errors.New("sxvault: nil client")
+		return SkillZipResult{}, errors.New("sxvault: nil client")
 	}
 	spec.Name = strings.TrimSpace(spec.Name)
 	spec.Version = strings.TrimSpace(spec.Version)
 	spec.BotName = strings.TrimSpace(spec.BotName)
 	if spec.Name == "" || spec.Version == "" {
-		return errors.New("sxvault: skill name and version are required")
+		return SkillZipResult{}, errors.New("sxvault: skill name and version are required")
 	}
 	zipData, err := normalizeSkillZip(spec)
 	if err != nil {
-		return err
+		return SkillZipResult{}, err
 	}
 	ctx = c.actorContext(ctx)
 	// Validate the target bot exists before any side effects, mirroring
@@ -535,21 +557,32 @@ func (c *Client) PutSkillZip(ctx context.Context, spec SkillZipSpec) error {
 	if spec.BotName != "" {
 		if _, bErr := c.v.GetBot(ctx, spec.BotName); bErr != nil {
 			if errors.Is(bErr, mgmt.ErrBotNotFound) {
-				return fmt.Errorf("sxvault: bot %q not found in vault: %w", spec.BotName, ErrBotNotFound)
+				return SkillZipResult{}, fmt.Errorf("sxvault: bot %q not found in vault: %w", spec.BotName, ErrBotNotFound)
 			}
-			return fmt.Errorf("sxvault: checking bot %q: %w", spec.BotName, bErr)
+			return SkillZipResult{}, fmt.Errorf("sxvault: checking bot %q: %w", spec.BotName, bErr)
 		}
 	}
 	ast := &lockfile.Asset{Name: spec.Name, Version: spec.Version, Type: asset.TypeSkill}
-	if err := c.addAsset(ctx, ast, zipData); err != nil {
-		return err
+	upload, err := c.addAssetWithResult(ctx, ast, zipData)
+	if err != nil {
+		return SkillZipResult{}, err
+	}
+	result := SkillZipResult{Name: strings.TrimSpace(upload.Name), Version: strings.TrimSpace(upload.Version)}
+	if result.Name == "" {
+		result.Name = spec.Name
+	}
+	if result.Version == "" {
+		result.Version = spec.Version
 	}
 	if spec.BotName == "" {
-		return nil
+		return result, nil
 	}
 	// ctx is already actor-wrapped above; use the internal form so the wrap
 	// doesn't run twice (mirrors PutAgent).
-	return c.installAssetToBot(ctx, spec.Name, spec.BotName)
+	if err := c.installAssetToBot(ctx, result.Name, spec.BotName); err != nil {
+		return SkillZipResult{}, err
+	}
+	return result, nil
 }
 
 func (c *Client) ListBots(ctx context.Context) ([]BotSummary, error) {
@@ -836,8 +869,20 @@ func (c *Client) GetAssetZip(ctx context.Context, name, version string) (AssetZi
 	}, nil
 }
 
-func (c *Client) addAsset(ctx context.Context, ast *lockfile.Asset, zipData []byte) error {
-	if err := c.v.AddAsset(ctx, ast, zipData); err != nil {
+type assetAdderWithResult interface {
+	AddAssetWithResult(ctx context.Context, asset *lockfile.Asset, zipData []byte) (vault.AddAssetResult, error)
+}
+
+func (c *Client) addAssetWithResult(ctx context.Context, ast *lockfile.Asset, zipData []byte) (vault.AddAssetResult, error) {
+	result := vault.AddAssetResult{Name: ast.Name, Version: ast.Version}
+	var err error
+	if adder, ok := c.v.(assetAdderWithResult); ok {
+		result, err = adder.AddAssetWithResult(ctx, ast, zipData)
+	} else {
+		err = c.v.AddAsset(ctx, ast, zipData)
+	}
+	result = defaultAddAssetResult(result, ast)
+	if err != nil {
 		// Re-publishing an existing name@version is intentionally a no-op
 		// for stored content. We still fall through to InheritInstallations
 		// so a retry after a half-failed prior publish (asset bytes
@@ -848,14 +893,30 @@ func (c *Client) addAsset(ctx context.Context, ast *lockfile.Asset, zipData []by
 		// the local assets/ tree the fallback fabricates.
 		var exists *vault.ErrVersionExists
 		if !errors.As(err, &exists) {
-			return err
+			return vault.AddAssetResult{}, err
 		}
-		return c.v.InheritInstallations(ctx, ast)
+		if err := c.v.InheritInstallations(ctx, ast); err != nil {
+			return vault.AddAssetResult{}, err
+		}
+		return result, nil
 	}
 	if ast.SourcePath == nil && ast.SourceHTTP == nil && ast.SourceGit == nil {
 		ast.SourcePath = &lockfile.SourcePath{Path: "assets/" + ast.Name + "/" + ast.Version}
 	}
-	return c.v.InheritInstallations(ctx, ast)
+	if err := c.v.InheritInstallations(ctx, ast); err != nil {
+		return vault.AddAssetResult{}, err
+	}
+	return result, nil
+}
+
+func defaultAddAssetResult(result vault.AddAssetResult, ast *lockfile.Asset) vault.AddAssetResult {
+	if strings.TrimSpace(result.Name) == "" {
+		result.Name = ast.Name
+	}
+	if strings.TrimSpace(result.Version) == "" {
+		result.Version = ast.Version
+	}
+	return result
 }
 
 func (c *Client) actorContext(ctx context.Context) context.Context {

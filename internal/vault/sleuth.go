@@ -189,8 +189,15 @@ func (s *SleuthVault) GetAsset(ctx context.Context, asset *lockfile.Asset) ([]by
 	}
 }
 
-// AddAsset uploads an asset to the Sleuth server
+// AddAsset uploads an asset to the Sleuth server.
 func (s *SleuthVault) AddAsset(ctx context.Context, asset *lockfile.Asset, zipData []byte) error {
+	_, err := s.AddAssetWithResult(ctx, asset, zipData)
+	return err
+}
+
+// AddAssetWithResult uploads an asset to the Sleuth server and returns the
+// persisted asset identifiers from the server response.
+func (s *SleuthVault) AddAssetWithResult(ctx context.Context, asset *lockfile.Asset, zipData []byte) (AddAssetResult, error) {
 	endpoint := s.serverURL + "/api/skills/assets"
 
 	// Create multipart writer
@@ -200,10 +207,10 @@ func (s *SleuthVault) AddAsset(ctx context.Context, asset *lockfile.Asset, zipDa
 	// Add file part
 	part, err := writer.CreateFormFile("file", fmt.Sprintf("%s-%s.zip", asset.Name, asset.Version))
 	if err != nil {
-		return fmt.Errorf("failed to create form file: %w", err)
+		return AddAssetResult{}, fmt.Errorf("failed to create form file: %w", err)
 	}
 	if _, err := part.Write(zipData); err != nil {
-		return fmt.Errorf("failed to write zip data: %w", err)
+		return AddAssetResult{}, fmt.Errorf("failed to write zip data: %w", err)
 	}
 
 	// Add metadata fields
@@ -213,13 +220,13 @@ func (s *SleuthVault) AddAsset(ctx context.Context, asset *lockfile.Asset, zipDa
 
 	// Close writer
 	if err := writer.Close(); err != nil {
-		return fmt.Errorf("failed to close writer: %w", err)
+		return AddAssetResult{}, fmt.Errorf("failed to close writer: %w", err)
 	}
 
 	// Create request
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return AddAssetResult{}, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -231,7 +238,7 @@ func (s *SleuthVault) AddAsset(ctx context.Context, asset *lockfile.Asset, zipDa
 	// Execute request
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to upload asset: %w", err)
+		return AddAssetResult{}, fmt.Errorf("failed to upload asset: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -248,31 +255,31 @@ func (s *SleuthVault) AddAsset(ctx context.Context, asset *lockfile.Asset, zipDa
 
 	if err := json.NewDecoder(resp.Body).Decode(&uploadResp); err != nil {
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-			return fmt.Errorf("HTTP %d", resp.StatusCode)
+			return AddAssetResult{}, fmt.Errorf("HTTP %d", resp.StatusCode)
 		}
-		return fmt.Errorf("failed to parse response: %w", err)
+		return AddAssetResult{}, fmt.Errorf("failed to parse response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		if uploadResp.Error != "" {
 			// Check for version conflict error
 			if strings.Contains(uploadResp.Error, "already exists") {
-				return &ErrVersionExists{
+				return AddAssetResult{}, &ErrVersionExists{
 					Name:    asset.Name,
 					Version: asset.Version,
 					Message: uploadResp.Error,
 				}
 			}
-			return errors.New(uploadResp.Error)
+			return AddAssetResult{}, errors.New(uploadResp.Error)
 		}
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
+		return AddAssetResult{}, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
 	if !uploadResp.Success {
 		if uploadResp.Error != "" {
-			return errors.New(uploadResp.Error)
+			return AddAssetResult{}, errors.New(uploadResp.Error)
 		}
-		return errors.New("upload failed: server returned success=false")
+		return AddAssetResult{}, errors.New("upload failed: server returned success=false")
 	}
 
 	// Update asset with source information if server returns URL
@@ -282,7 +289,11 @@ func (s *SleuthVault) AddAsset(ctx context.Context, asset *lockfile.Asset, zipDa
 		}
 	}
 
-	return nil
+	return AddAssetResult{
+		Name:    uploadResp.Asset.Name,
+		Version: uploadResp.Asset.Version,
+		URL:     uploadResp.Asset.URL,
+	}, nil
 }
 
 // GetVersionList retrieves available versions for an asset

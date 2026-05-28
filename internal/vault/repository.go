@@ -35,6 +35,15 @@ func (e *ErrVersionExists) Error() string {
 	return fmt.Sprintf("version %s already exists for asset %s", e.Version, e.Name)
 }
 
+// AddAssetResult contains canonical asset information returned by a vault
+// after upload. Server-backed vaults may normalize the requested name into a
+// persisted slug; callers should use Name for follow-up operations.
+type AddAssetResult struct {
+	Name    string
+	Version string
+	URL     string
+}
+
 // Vault represents a source of assets with read and write capabilities
 // This interface unifies the concepts of "vault" and "source fetcher"
 type Vault interface {
