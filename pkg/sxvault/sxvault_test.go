@@ -399,16 +399,16 @@ func TestPutSkillZipWithBotClearsDefaultUploadInstall(t *testing.T) {
 }
 
 // TestPutAgentCreatesSleuthAgentViaGraphQL verifies PutAgent uses the
-// Skills.new-native createAsset(rawContent) path for agent assets, strips the
-// server's default org-wide install, and installs the created agent asset on
-// the bot.
+// Skills.new-native createAsset(rawContent, installations:[BOT]) path for
+// agent assets so the created asset is bot-scoped from birth and never needs a
+// default org install cleanup.
 func TestPutAgentCreatesSleuthAgentViaGraphQL(t *testing.T) {
 	ctx := context.Background()
-	var clearedAsset string
+	var installTarget string
 	var ops []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/skills/assets/my-agent/list.txt":
+		case "/api/skills/assets/my-agent_agent/list.txt":
 			http.NotFound(w, r)
 		case "/graphql":
 			var req struct {
@@ -420,9 +420,17 @@ func TestPutAgentCreatesSleuthAgentViaGraphQL(t *testing.T) {
 				return
 			}
 			ops = append(ops, req.OperationName)
-			if req.OperationName == "RemoveAssetInstallations" {
+			if req.OperationName == "CreateAgentAsset" {
 				input, _ := req.Variables["input"].(map[string]any)
-				clearedAsset, _ = input["assetName"].(string)
+				installations, _ := input["installations"].([]any)
+				if len(installations) != 1 {
+					t.Fatalf("CreateAgentAsset installations = %#v, want one bot installation", input["installations"])
+				}
+				installation, _ := installations[0].(map[string]any)
+				if installation["entityType"] != "BOT" {
+					t.Fatalf("CreateAgentAsset entityType = %v, want BOT", installation["entityType"])
+				}
+				installTarget, _ = installation["entityId"].(string)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": sxvaultAgentGraphQLResponse(t, req.OperationName, req.Variables)})
@@ -438,7 +446,7 @@ func TestPutAgentCreatesSleuthAgentViaGraphQL(t *testing.T) {
 	}
 	got, err := client.PutAgent(ctx, AgentSpec{
 		BotName:   "reviewer",
-		AssetName: "my-agent",
+		AssetName: "my-agent_agent",
 		Version:   "1",
 		Prompt:    "You are an agent.",
 	})
@@ -448,10 +456,71 @@ func TestPutAgentCreatesSleuthAgentViaGraphQL(t *testing.T) {
 	if got.AgentName != "my-agent_agent" {
 		t.Fatalf("AgentName = %q, want server slug my-agent_agent", got.AgentName)
 	}
-	if clearedAsset != "my-agent_agent" {
-		t.Fatalf("ClearAssetInstallations asset = %q, want server slug my-agent_agent", clearedAsset)
+	if installTarget != "bot-1" {
+		t.Fatalf("CreateAgentAsset bot install target = %q, want bot-1", installTarget)
 	}
-	wantOps := "ListBots,CreateAgentAsset,ListBots,BotInstalled,RemoveAssetInstallations,ListBots,AssetGID,InstallSkillToBot"
+	wantOps := "ListBots,ListBots,CreateAgentAsset"
+	if gotOps := strings.Join(ops, ","); gotOps != wantOps {
+		t.Fatalf("GraphQL ops = %s, want %s", gotOps, wantOps)
+	}
+}
+
+func TestPutAgentInstallsExistingSleuthAgentViaUpdateAsset(t *testing.T) {
+	ctx := context.Background()
+	var ops []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/skills/assets/my-agent_agent/list.txt":
+			_, _ = w.Write([]byte("1\n"))
+		case "/graphql":
+			var req struct {
+				OperationName string         `json:"operationName"`
+				Variables     map[string]any `json:"variables"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			ops = append(ops, req.OperationName)
+			if req.OperationName == "UpdateAssetBotInstallation" {
+				input, _ := req.Variables["input"].(map[string]any)
+				if input["id"] != "agent-1" {
+					t.Fatalf("UpdateAssetBotInstallation id = %v, want agent-1", input["id"])
+				}
+				installations, _ := input["installations"].([]any)
+				if len(installations) != 1 {
+					t.Fatalf("UpdateAssetBotInstallation installations = %#v, want one bot installation", input["installations"])
+				}
+				installation, _ := installations[0].(map[string]any)
+				if installation["entityType"] != "BOT" || installation["entityId"] != "bot-1" {
+					t.Fatalf("UpdateAssetBotInstallation target = %#v, want bot-1", installation)
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": sxvaultAgentGraphQLResponse(t, req.OperationName, req.Variables)})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := OpenSkillsNew(srv.URL, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.PutAgent(ctx, AgentSpec{
+		BotName:   "reviewer",
+		AssetName: "my-agent_agent",
+		Version:   "1",
+		Prompt:    "You are an agent.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AgentName != "my-agent_agent" {
+		t.Fatalf("AgentName = %q, want requested existing asset name", got.AgentName)
+	}
+	wantOps := "ListBots,ListBots,AssetGID,UpdateAssetBotInstallation"
 	if gotOps := strings.Join(ops, ","); gotOps != wantOps {
 		t.Fatalf("GraphQL ops = %s, want %s", gotOps, wantOps)
 	}
@@ -511,6 +580,20 @@ func sxvaultAgentGraphQLResponse(t *testing.T, operation string, vars map[string
 	case "InstallSkillToBot":
 		return map[string]any{
 			"installSkillToBot": map[string]any{"success": true, "errors": []any{}},
+		}
+	case "UpdateAssetBotInstallation":
+		return map[string]any{
+			"updateAsset": map[string]any{
+				"asset": map[string]any{
+					"__typename":    "Agent",
+					"id":            "agent-1",
+					"name":          "My Agent",
+					"slug":          "my-agent_agent",
+					"type":          "AGENT",
+					"latestVersion": "1",
+				},
+				"errors": []any{},
+			},
 		}
 	default:
 		t.Fatalf("unexpected GraphQL operation %q", operation)

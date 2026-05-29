@@ -952,15 +952,25 @@ func (s *SleuthVault) DeleteBotApiKey(ctx context.Context, botName, keyID string
 	return nil
 }
 
-func (s *SleuthVault) CreateAgentAsset(ctx context.Context, name, description, rawContent string) (AddAssetResult, error) {
+func (s *SleuthVault) CreateAgentAsset(ctx context.Context, name, description, rawContent, botName string) (AddAssetResult, error) {
 	name = strings.TrimSpace(name)
 	rawContent = strings.TrimSpace(rawContent)
 	if name == "" || rawContent == "" {
 		return AddAssetResult{}, errors.New("agent name and raw content are required")
 	}
+	botGID, err := s.botGIDByName(ctx, botName)
+	if err != nil {
+		return AddAssetResult{}, fmt.Errorf("resolve bot for agent install: %w", err)
+	}
 	input := vaultgql.CreateAssetInput{
-		Name:       name,
-		AssetType:  "agent",
+		Name:      name,
+		AssetType: "agent",
+		Installations: []vaultgql.AssetInstallationInput{
+			{
+				EntityType: vaultgql.VaultAssetInstallationEntityTypeBot,
+				EntityId:   &botGID,
+			},
+		},
 		RawContent: &rawContent,
 	}
 	if description = strings.TrimSpace(description); description != "" {
@@ -968,7 +978,7 @@ func (s *SleuthVault) CreateAgentAsset(ctx context.Context, name, description, r
 	}
 	resp, err := vaultgql.CreateAgentAsset(ctx, s.gqlClient(), input)
 	if err != nil {
-		return AddAssetResult{}, err
+		return AddAssetResult{}, fmt.Errorf("create agent asset: %w", err)
 	}
 	if resp.CreateAsset == nil {
 		return AddAssetResult{}, errors.New("missing createAsset payload in response")
@@ -983,7 +993,7 @@ func (s *SleuthVault) CreateAgentAsset(ctx context.Context, name, description, r
 	result := AddAssetResult{
 		Name:           strings.TrimSpace(asset.GetSlug()),
 		Version:        strings.TrimSpace(asset.GetLatestVersion()),
-		IsFirstVersion: true,
+		IsFirstVersion: false,
 	}
 	if result.Name == "" {
 		result.Name = name
@@ -992,6 +1002,39 @@ func (s *SleuthVault) CreateAgentAsset(ctx context.Context, name, description, r
 		result.Version = "1"
 	}
 	return result, nil
+}
+
+func (s *SleuthVault) InstallAgentAssetToBot(ctx context.Context, agentName, botName string) error {
+	botGID, err := s.botGIDByName(ctx, botName)
+	if err != nil {
+		return fmt.Errorf("resolve bot for agent install: %w", err)
+	}
+	agentGID, err := s.assetGIDByName(ctx, agentName)
+	if err != nil {
+		return fmt.Errorf("resolve agent for bot install: %w", err)
+	}
+	resp, err := vaultgql.UpdateAssetBotInstallation(ctx, s.gqlClient(), vaultgql.UpdateAssetInput{
+		Id: agentGID,
+		Installations: []vaultgql.AssetInstallationInput{
+			{
+				EntityType: vaultgql.VaultAssetInstallationEntityTypeBot,
+				EntityId:   &botGID,
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("update agent bot installation: %w", err)
+	}
+	if resp.UpdateAsset == nil {
+		return errors.New("missing updateAsset payload in response")
+	}
+	if err := gqlMutationErrors(resp.UpdateAsset.Errors); err != nil {
+		return err
+	}
+	if resp.UpdateAsset.Asset == nil {
+		return errors.New("updateAsset returned no asset")
+	}
+	return nil
 }
 
 func (s *SleuthVault) ClearAssetInstallations(ctx context.Context, assetName string) error {

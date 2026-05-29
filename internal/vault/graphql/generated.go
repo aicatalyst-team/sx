@@ -2584,6 +2584,613 @@ func (v *UninstallSkillFromBotUninstallSkillFromBotUninstallSkillFromBotMutation
 	return v.Messages
 }
 
+// UpdateAssetBotInstallationResponse is returned by UpdateAssetBotInstallation on success.
+type UpdateAssetBotInstallationResponse struct {
+	UpdateAsset *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutation `json:"updateAsset"`
+}
+
+// GetUpdateAsset returns UpdateAssetBotInstallationResponse.UpdateAsset, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationResponse) GetUpdateAsset() *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutation {
+	return v.UpdateAsset
+}
+
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutation includes the requested fields of the GraphQL type UpdateAssetMutation.
+type UpdateAssetBotInstallationUpdateAssetUpdateAssetMutation struct {
+	Asset  *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset  `json:"-"`
+	Errors []UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationErrorsErrorType `json:"errors"`
+}
+
+// GetAsset returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutation.Asset, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutation) GetAsset() *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset {
+	return v.Asset
+}
+
+// GetErrors returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutation.Errors, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutation) GetErrors() []UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationErrorsErrorType {
+	return v.Errors
+}
+
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutation) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*UpdateAssetBotInstallationUpdateAssetUpdateAssetMutation
+		Asset json.RawMessage `json:"asset"`
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.UpdateAssetBotInstallationUpdateAssetUpdateAssetMutation = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	{
+		dst := &v.Asset
+		src := firstPass.Asset
+		if len(src) != 0 && string(src) != "null" {
+			*dst = new(UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset)
+			err = __unmarshalUpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset(
+				src, *dst)
+			if err != nil {
+				return fmt.Errorf(
+					"unable to unmarshal UpdateAssetBotInstallationUpdateAssetUpdateAssetMutation.Asset: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+type __premarshalUpdateAssetBotInstallationUpdateAssetUpdateAssetMutation struct {
+	Asset json.RawMessage `json:"asset"`
+
+	Errors []UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationErrorsErrorType `json:"errors"`
+}
+
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutation) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutation) __premarshalJSON() (*__premarshalUpdateAssetBotInstallationUpdateAssetUpdateAssetMutation, error) {
+	var retval __premarshalUpdateAssetBotInstallationUpdateAssetUpdateAssetMutation
+
+	{
+
+		dst := &retval.Asset
+		src := v.Asset
+		if src != nil {
+			var err error
+			*dst, err = __marshalUpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset(
+				src)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"unable to marshal UpdateAssetBotInstallationUpdateAssetUpdateAssetMutation.Asset: %w", err)
+			}
+		}
+	}
+	retval.Errors = v.Errors
+	return &retval, nil
+}
+
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent includes the requested fields of the GraphQL type Agent.
+type UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent struct {
+	Typename      *string   `json:"__typename"`
+	Id            string    `json:"id"`
+	Slug          string    `json:"slug"`
+	Name          string    `json:"name"`
+	Type          AssetType `json:"type"`
+	LatestVersion string    `json:"latestVersion"`
+}
+
+// GetTypename returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent.Typename, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent) GetTypename() *string {
+	return v.Typename
+}
+
+// GetId returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent.Id, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent) GetId() string {
+	return v.Id
+}
+
+// GetSlug returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent.Slug, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent) GetSlug() string {
+	return v.Slug
+}
+
+// GetName returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent.Name, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent) GetName() string {
+	return v.Name
+}
+
+// GetType returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent.Type, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent) GetType() AssetType {
+	return v.Type
+}
+
+// GetLatestVersion returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent.LatestVersion, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent) GetLatestVersion() string {
+	return v.LatestVersion
+}
+
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin includes the requested fields of the GraphQL type ClaudeCodePlugin.
+type UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin struct {
+	Typename      *string   `json:"__typename"`
+	Id            string    `json:"id"`
+	Slug          string    `json:"slug"`
+	Name          string    `json:"name"`
+	Type          AssetType `json:"type"`
+	LatestVersion string    `json:"latestVersion"`
+}
+
+// GetTypename returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin.Typename, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin) GetTypename() *string {
+	return v.Typename
+}
+
+// GetId returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin.Id, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin) GetId() string {
+	return v.Id
+}
+
+// GetSlug returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin.Slug, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin) GetSlug() string {
+	return v.Slug
+}
+
+// GetName returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin.Name, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin) GetName() string {
+	return v.Name
+}
+
+// GetType returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin.Type, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin) GetType() AssetType {
+	return v.Type
+}
+
+// GetLatestVersion returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin.LatestVersion, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin) GetLatestVersion() string {
+	return v.LatestVersion
+}
+
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand includes the requested fields of the GraphQL type Command.
+type UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand struct {
+	Typename      *string   `json:"__typename"`
+	Id            string    `json:"id"`
+	Slug          string    `json:"slug"`
+	Name          string    `json:"name"`
+	Type          AssetType `json:"type"`
+	LatestVersion string    `json:"latestVersion"`
+}
+
+// GetTypename returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand.Typename, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand) GetTypename() *string {
+	return v.Typename
+}
+
+// GetId returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand.Id, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand) GetId() string {
+	return v.Id
+}
+
+// GetSlug returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand.Slug, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand) GetSlug() string {
+	return v.Slug
+}
+
+// GetName returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand.Name, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand) GetName() string {
+	return v.Name
+}
+
+// GetType returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand.Type, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand) GetType() AssetType {
+	return v.Type
+}
+
+// GetLatestVersion returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand.LatestVersion, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand) GetLatestVersion() string {
+	return v.LatestVersion
+}
+
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook includes the requested fields of the GraphQL type Hook.
+type UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook struct {
+	Typename      *string   `json:"__typename"`
+	Id            string    `json:"id"`
+	Slug          string    `json:"slug"`
+	Name          string    `json:"name"`
+	Type          AssetType `json:"type"`
+	LatestVersion string    `json:"latestVersion"`
+}
+
+// GetTypename returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook.Typename, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook) GetTypename() *string {
+	return v.Typename
+}
+
+// GetId returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook.Id, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook) GetId() string {
+	return v.Id
+}
+
+// GetSlug returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook.Slug, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook) GetSlug() string {
+	return v.Slug
+}
+
+// GetName returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook.Name, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook) GetName() string {
+	return v.Name
+}
+
+// GetType returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook.Type, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook) GetType() AssetType {
+	return v.Type
+}
+
+// GetLatestVersion returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook.LatestVersion, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook) GetLatestVersion() string {
+	return v.LatestVersion
+}
+
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer includes the requested fields of the GraphQL type McpServer.
+type UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer struct {
+	Typename      *string   `json:"__typename"`
+	Id            string    `json:"id"`
+	Slug          string    `json:"slug"`
+	Name          string    `json:"name"`
+	Type          AssetType `json:"type"`
+	LatestVersion string    `json:"latestVersion"`
+}
+
+// GetTypename returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer.Typename, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer) GetTypename() *string {
+	return v.Typename
+}
+
+// GetId returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer.Id, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer) GetId() string {
+	return v.Id
+}
+
+// GetSlug returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer.Slug, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer) GetSlug() string {
+	return v.Slug
+}
+
+// GetName returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer.Name, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer) GetName() string {
+	return v.Name
+}
+
+// GetType returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer.Type, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer) GetType() AssetType {
+	return v.Type
+}
+
+// GetLatestVersion returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer.LatestVersion, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer) GetLatestVersion() string {
+	return v.LatestVersion
+}
+
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule includes the requested fields of the GraphQL type Rule.
+type UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule struct {
+	Typename      *string   `json:"__typename"`
+	Id            string    `json:"id"`
+	Slug          string    `json:"slug"`
+	Name          string    `json:"name"`
+	Type          AssetType `json:"type"`
+	LatestVersion string    `json:"latestVersion"`
+}
+
+// GetTypename returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule.Typename, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule) GetTypename() *string {
+	return v.Typename
+}
+
+// GetId returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule.Id, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule) GetId() string {
+	return v.Id
+}
+
+// GetSlug returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule.Slug, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule) GetSlug() string {
+	return v.Slug
+}
+
+// GetName returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule.Name, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule) GetName() string {
+	return v.Name
+}
+
+// GetType returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule.Type, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule) GetType() AssetType {
+	return v.Type
+}
+
+// GetLatestVersion returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule.LatestVersion, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule) GetLatestVersion() string {
+	return v.LatestVersion
+}
+
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill includes the requested fields of the GraphQL type Skill.
+// The GraphQL type's documentation follows.
+//
+// GraphQL type for skill.
+type UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill struct {
+	Typename      *string   `json:"__typename"`
+	Id            string    `json:"id"`
+	Slug          string    `json:"slug"`
+	Name          string    `json:"name"`
+	Type          AssetType `json:"type"`
+	LatestVersion string    `json:"latestVersion"`
+}
+
+// GetTypename returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill.Typename, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill) GetTypename() *string {
+	return v.Typename
+}
+
+// GetId returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill.Id, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill) GetId() string {
+	return v.Id
+}
+
+// GetSlug returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill.Slug, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill) GetSlug() string {
+	return v.Slug
+}
+
+// GetName returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill.Name, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill) GetName() string {
+	return v.Name
+}
+
+// GetType returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill.Type, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill) GetType() AssetType {
+	return v.Type
+}
+
+// GetLatestVersion returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill.LatestVersion, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill) GetLatestVersion() string {
+	return v.LatestVersion
+}
+
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset includes the requested fields of the GraphQL interface VaultAsset.
+//
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset is implemented by the following types:
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill
+// The GraphQL type's documentation follows.
+//
+// Asset in the vault (Skill, MCP, Agent, etc.).
+type UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset interface {
+	implementsGraphQLInterfaceUpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset()
+	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
+	GetTypename() *string
+	// GetId returns the interface-field "id" from its implementation.
+	GetId() string
+	// GetSlug returns the interface-field "slug" from its implementation.
+	GetSlug() string
+	// GetName returns the interface-field "name" from its implementation.
+	GetName() string
+	// GetType returns the interface-field "type" from its implementation.
+	GetType() AssetType
+	// GetLatestVersion returns the interface-field "latestVersion" from its implementation.
+	GetLatestVersion() string
+}
+
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent) implementsGraphQLInterfaceUpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset() {
+}
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin) implementsGraphQLInterfaceUpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset() {
+}
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand) implementsGraphQLInterfaceUpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset() {
+}
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook) implementsGraphQLInterfaceUpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset() {
+}
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer) implementsGraphQLInterfaceUpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset() {
+}
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule) implementsGraphQLInterfaceUpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset() {
+}
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill) implementsGraphQLInterfaceUpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset() {
+}
+
+func __unmarshalUpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset(b []byte, v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset) error {
+	if string(b) == "null" {
+		return nil
+	}
+
+	var tn struct {
+		TypeName string `json:"__typename"`
+	}
+	err := json.Unmarshal(b, &tn)
+	if err != nil {
+		return err
+	}
+
+	switch tn.TypeName {
+	case "Agent":
+		*v = new(UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent)
+		return json.Unmarshal(b, *v)
+	case "ClaudeCodePlugin":
+		*v = new(UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin)
+		return json.Unmarshal(b, *v)
+	case "Command":
+		*v = new(UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand)
+		return json.Unmarshal(b, *v)
+	case "Hook":
+		*v = new(UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook)
+		return json.Unmarshal(b, *v)
+	case "McpServer":
+		*v = new(UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer)
+		return json.Unmarshal(b, *v)
+	case "Rule":
+		*v = new(UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule)
+		return json.Unmarshal(b, *v)
+	case "Skill":
+		*v = new(UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill)
+		return json.Unmarshal(b, *v)
+	case "":
+		return fmt.Errorf(
+			"response was missing VaultAsset.__typename")
+	default:
+		return fmt.Errorf(
+			`unexpected concrete type for UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset: "%v"`, tn.TypeName)
+	}
+}
+
+func __marshalUpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset(v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset) ([]byte, error) {
+
+	var typename string
+	switch v := (*v).(type) {
+	case *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent:
+		typename = "Agent"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetAgent
+		}{typename, v}
+		return json.Marshal(result)
+	case *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin:
+		typename = "ClaudeCodePlugin"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetClaudeCodePlugin
+		}{typename, v}
+		return json.Marshal(result)
+	case *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand:
+		typename = "Command"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetCommand
+		}{typename, v}
+		return json.Marshal(result)
+	case *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook:
+		typename = "Hook"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetHook
+		}{typename, v}
+		return json.Marshal(result)
+	case *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer:
+		typename = "McpServer"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetMcpServer
+		}{typename, v}
+		return json.Marshal(result)
+	case *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule:
+		typename = "Rule"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetRule
+		}{typename, v}
+		return json.Marshal(result)
+	case *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill:
+		typename = "Skill"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetSkill
+		}{typename, v}
+		return json.Marshal(result)
+	case nil:
+		return []byte("null"), nil
+	default:
+		return nil, fmt.Errorf(
+			`unexpected concrete type for UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationAssetVaultAsset: "%T"`, v)
+	}
+}
+
+// UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationErrorsErrorType includes the requested fields of the GraphQL type ErrorType.
+type UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationErrorsErrorType struct {
+	Field    string   `json:"field"`
+	Messages []string `json:"messages"`
+}
+
+// GetField returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationErrorsErrorType.Field, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationErrorsErrorType) GetField() string {
+	return v.Field
+}
+
+// GetMessages returns UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationErrorsErrorType.Messages, and is useful for accessing the field via an interface.
+func (v *UpdateAssetBotInstallationUpdateAssetUpdateAssetMutationErrorsErrorType) GetMessages() []string {
+	return v.Messages
+}
+
+type UpdateAssetInput struct {
+	Id          string  `json:"id"`
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+	// Replace the asset's installations entirely. Empty list = org-wide.
+	Installations []AssetInstallationInput `json:"installations"`
+	// Rule asset globs
+	RuleGlobs    []string       `json:"ruleGlobs"`
+	McpUrl       *string        `json:"mcpUrl"`
+	McpTransport *string        `json:"mcpTransport"`
+	McpToolNames []McpToolInput `json:"mcpToolNames"`
+	HookEvent    *string        `json:"hookEvent"`
+	HookCommand  *string        `json:"hookCommand"`
+	HookArgs     []string       `json:"hookArgs"`
+	HookTimeout  *int           `json:"hookTimeout"`
+	HookMatcher  *string        `json:"hookMatcher"`
+}
+
+// GetId returns UpdateAssetInput.Id, and is useful for accessing the field via an interface.
+func (v *UpdateAssetInput) GetId() string { return v.Id }
+
+// GetName returns UpdateAssetInput.Name, and is useful for accessing the field via an interface.
+func (v *UpdateAssetInput) GetName() *string { return v.Name }
+
+// GetDescription returns UpdateAssetInput.Description, and is useful for accessing the field via an interface.
+func (v *UpdateAssetInput) GetDescription() *string { return v.Description }
+
+// GetInstallations returns UpdateAssetInput.Installations, and is useful for accessing the field via an interface.
+func (v *UpdateAssetInput) GetInstallations() []AssetInstallationInput { return v.Installations }
+
+// GetRuleGlobs returns UpdateAssetInput.RuleGlobs, and is useful for accessing the field via an interface.
+func (v *UpdateAssetInput) GetRuleGlobs() []string { return v.RuleGlobs }
+
+// GetMcpUrl returns UpdateAssetInput.McpUrl, and is useful for accessing the field via an interface.
+func (v *UpdateAssetInput) GetMcpUrl() *string { return v.McpUrl }
+
+// GetMcpTransport returns UpdateAssetInput.McpTransport, and is useful for accessing the field via an interface.
+func (v *UpdateAssetInput) GetMcpTransport() *string { return v.McpTransport }
+
+// GetMcpToolNames returns UpdateAssetInput.McpToolNames, and is useful for accessing the field via an interface.
+func (v *UpdateAssetInput) GetMcpToolNames() []McpToolInput { return v.McpToolNames }
+
+// GetHookEvent returns UpdateAssetInput.HookEvent, and is useful for accessing the field via an interface.
+func (v *UpdateAssetInput) GetHookEvent() *string { return v.HookEvent }
+
+// GetHookCommand returns UpdateAssetInput.HookCommand, and is useful for accessing the field via an interface.
+func (v *UpdateAssetInput) GetHookCommand() *string { return v.HookCommand }
+
+// GetHookArgs returns UpdateAssetInput.HookArgs, and is useful for accessing the field via an interface.
+func (v *UpdateAssetInput) GetHookArgs() []string { return v.HookArgs }
+
+// GetHookTimeout returns UpdateAssetInput.HookTimeout, and is useful for accessing the field via an interface.
+func (v *UpdateAssetInput) GetHookTimeout() *int { return v.HookTimeout }
+
+// GetHookMatcher returns UpdateAssetInput.HookMatcher, and is useful for accessing the field via an interface.
+func (v *UpdateAssetInput) GetHookMatcher() *string { return v.HookMatcher }
+
 type UpdateBotInput struct {
 	Id          string   `json:"id"`
 	Name        *string  `json:"name"`
@@ -4174,6 +4781,14 @@ func (v *__UninstallSkillFromBotInput) GetBotId() string { return v.BotId }
 // GetSkillId returns __UninstallSkillFromBotInput.SkillId, and is useful for accessing the field via an interface.
 func (v *__UninstallSkillFromBotInput) GetSkillId() string { return v.SkillId }
 
+// __UpdateAssetBotInstallationInput is used internally by genqlient
+type __UpdateAssetBotInstallationInput struct {
+	Input UpdateAssetInput `json:"input"`
+}
+
+// GetInput returns __UpdateAssetBotInstallationInput.Input, and is useful for accessing the field via an interface.
+func (v *__UpdateAssetBotInstallationInput) GetInput() UpdateAssetInput { return v.Input }
+
 // __UpdateBotInput is used internally by genqlient
 type __UpdateBotInput struct {
 	Input UpdateBotInput `json:"input"`
@@ -5160,6 +5775,51 @@ func UninstallSkillFromBot(
 	}
 
 	data_ = &UninstallSkillFromBotResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The mutation executed by UpdateAssetBotInstallation.
+const UpdateAssetBotInstallation_Operation = `
+mutation UpdateAssetBotInstallation ($input: UpdateAssetInput!) {
+	updateAsset(input: $input) {
+		asset {
+			__typename
+			id
+			slug
+			name
+			type
+			latestVersion
+		}
+		errors {
+			field
+			messages
+		}
+	}
+}
+`
+
+func UpdateAssetBotInstallation(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	input UpdateAssetInput,
+) (data_ *UpdateAssetBotInstallationResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "UpdateAssetBotInstallation",
+		Query:  UpdateAssetBotInstallation_Operation,
+		Variables: &__UpdateAssetBotInstallationInput{
+			Input: input,
+		},
+	}
+
+	data_ = &UpdateAssetBotInstallationResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
