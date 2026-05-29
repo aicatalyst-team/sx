@@ -21,6 +21,9 @@ var ErrLockFileNotFound = errors.New("lock file not found")
 // management operation.
 var ErrNotImplemented = errors.New("operation not supported for this vault type")
 
+// ErrAssetNotFound is returned when a requested asset does not exist.
+var ErrAssetNotFound = errors.New("asset not found")
+
 // ErrVersionExists is returned when attempting to add an asset version that already exists
 type ErrVersionExists struct {
 	Name    string

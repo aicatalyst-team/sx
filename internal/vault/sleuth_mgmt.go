@@ -637,34 +637,43 @@ func (s *SleuthVault) resolveTeamGIDs(ctx context.Context, names []string) ([]st
 // slugs, so callers using the public API must be able to pass that value
 // back here without being blocked by another asset's display name.
 func (s *SleuthVault) assetGIDByName(ctx context.Context, name string) (string, error) {
-	resp, err := vaultgql.AssetGID(ctx, s.gqlClient(), name)
+	info, err := s.assetInfoByName(ctx, name)
 	if err != nil {
 		return "", err
+	}
+	return info.id, nil
+}
+
+func (s *SleuthVault) assetInfoByName(ctx context.Context, name string) (assetIDMatch, error) {
+	resp, err := vaultgql.AssetGID(ctx, s.gqlClient(), name)
+	if err != nil {
+		return assetIDMatch{}, err
 	}
 	// VaultAsset is a GraphQL interface with concrete subtypes
 	// (Skill, MCP, Agent, ClaudeCodePlugin, ...). Use the interface
 	// getters to avoid switching on every variant.
 	name = strings.TrimSpace(name)
-	var slugMatchID string
+	var slugMatch assetIDMatch
 	var nameMatches []assetIDMatch
 	for _, n := range resp.Vault.Assets.Nodes {
-		if n.GetSlug() == name && slugMatchID == "" {
-			slugMatchID = n.GetId()
+		match := assetIDMatch{id: n.GetId(), slug: n.GetSlug(), typ: string(n.GetType())}
+		if n.GetSlug() == name && slugMatch.id == "" {
+			slugMatch = match
 		}
 		if n.GetName() == name && n.GetSlug() != name {
-			nameMatches = appendDistinctAssetMatch(nameMatches, assetIDMatch{id: n.GetId(), slug: n.GetSlug()})
+			nameMatches = appendDistinctAssetMatch(nameMatches, match)
 		}
 	}
 	// An exact slug match is unambiguous — slugs are unique and are what
 	// ListAssets / upload responses hand back — so it always wins.
-	if slugMatchID != "" {
-		return slugMatchID, nil
+	if slugMatch.id != "" {
+		return slugMatch, nil
 	}
 	switch len(nameMatches) {
 	case 0:
-		return "", fmt.Errorf("asset %q not found", name)
+		return assetIDMatch{}, fmt.Errorf("asset %q not found", name)
 	case 1:
-		return nameMatches[0].id, nil
+		return nameMatches[0], nil
 	default:
 		// Several distinct assets share this display name and none matched
 		// it as a slug. Surface the ambiguity (with the candidate slugs)
@@ -673,13 +682,14 @@ func (s *SleuthVault) assetGIDByName(ctx context.Context, name string) (string, 
 		for _, m := range nameMatches {
 			slugs = append(slugs, m.slug)
 		}
-		return "", fmt.Errorf("asset name %q is ambiguous; multiple assets share it (slugs: %s) — install by slug instead", name, strings.Join(slugs, ", "))
+		return assetIDMatch{}, fmt.Errorf("asset name %q is ambiguous; multiple assets share it (slugs: %s) — install by slug instead", name, strings.Join(slugs, ", "))
 	}
 }
 
 type assetIDMatch struct {
 	id   string
 	slug string
+	typ  string
 }
 
 // appendDistinctAssetMatch appends m unless an entry with the same id is
@@ -769,7 +779,7 @@ const botsInstalledLookupConcurrency = 8
 // the local context; the function returns that error immediately so
 // ClearAssetInstallations doesn't continue against a possibly-inconsistent
 // view of the org.
-func (s *SleuthVault) botsWithAssetInstalled(ctx context.Context, assetName string) ([]string, error) {
+func (s *SleuthVault) botsWithAssetInstalled(ctx context.Context, assetName, assetType string) ([]string, error) {
 	nodes, err := s.listBotNodes(ctx)
 	if err != nil {
 		return nil, err
@@ -799,7 +809,7 @@ func (s *SleuthVault) botsWithAssetInstalled(ctx context.Context, assetName stri
 				return
 			}
 			for _, sk := range resp.Bot.InstalledSkills {
-				if sk.Name == assetName && sk.IsDirectInstall {
+				if sk.Name == assetName && sk.IsDirectInstall && isSleuthAssetType(sk.AssetType, assetType) {
 					results <- result{idx: idx, gid: n.ID}
 					break
 				}
@@ -999,7 +1009,7 @@ func (s *SleuthVault) CreateAgentAsset(ctx context.Context, name, description, r
 	result := AddAssetResult{
 		Name:           strings.TrimSpace(asset.GetSlug()),
 		Version:        strings.TrimSpace(asset.GetLatestVersion()),
-		IsFirstVersion: false,
+		IsFirstVersion: true,
 	}
 	if result.Name == "" {
 		result.Name = name
@@ -1010,39 +1020,6 @@ func (s *SleuthVault) CreateAgentAsset(ctx context.Context, name, description, r
 	return result, nil
 }
 
-func (s *SleuthVault) InstallAgentAssetToBot(ctx context.Context, agentName, botName string) error {
-	botGID, err := s.botGIDByName(ctx, botName)
-	if err != nil {
-		return fmt.Errorf("resolve bot for agent install: %w", err)
-	}
-	agentGID, err := s.assetGIDByName(ctx, agentName)
-	if err != nil {
-		return fmt.Errorf("resolve agent for bot install: %w", err)
-	}
-	resp, err := vaultgql.UpdateAssetBotInstallation(ctx, s.gqlClient(), vaultgql.UpdateAssetInput{
-		Id: agentGID,
-		Installations: []vaultgql.AssetInstallationInput{
-			{
-				EntityType: vaultgql.VaultAssetInstallationEntityTypeBot,
-				EntityId:   &botGID,
-			},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("update agent bot installation: %w", err)
-	}
-	if resp.UpdateAsset == nil {
-		return errors.New("missing updateAsset payload in response")
-	}
-	if err := gqlMutationErrors(resp.UpdateAsset.Errors); err != nil {
-		return err
-	}
-	if resp.UpdateAsset.Asset == nil {
-		return errors.New("updateAsset returned no asset")
-	}
-	return nil
-}
-
 func (s *SleuthVault) ClearAssetInstallations(ctx context.Context, assetName string) error {
 	// Two-step clear: removeAssetInstallations handles repo/team/user/
 	// org scopes but does NOT touch bot installs (those live in a
@@ -1051,19 +1028,17 @@ func (s *SleuthVault) ClearAssetInstallations(ctx context.Context, assetName str
 	// first; a partial failure here would leave us with neither the
 	// bot installs cleared nor the non-bot ones, so do bots first and
 	// only call the main clear if every bot uninstall succeeds.
-	botGIDs, err := s.botsWithAssetInstalled(ctx, assetName)
+	info, err := s.assetInfoByName(ctx, assetName)
+	if err != nil {
+		return err
+	}
+	botGIDs, err := s.botsWithAssetInstalled(ctx, assetName, info.typ)
 	if err != nil {
 		return fmt.Errorf("listing bots for asset %q: %w", assetName, err)
 	}
-	if len(botGIDs) > 0 {
-		skillGID, err := s.assetGIDByName(ctx, assetName)
-		if err != nil {
-			return err
-		}
-		for _, botGID := range botGIDs {
-			if err := s.uninstallSkillFromBot(ctx, skillGID, botGID, true); err != nil {
-				return fmt.Errorf("uninstalling %q from bot %s: %w", assetName, botGID, err)
-			}
+	for _, botGID := range botGIDs {
+		if err := s.uninstallSkillFromBot(ctx, info.id, botGID, true); err != nil {
+			return fmt.Errorf("uninstalling %q from bot %s: %w", assetName, botGID, err)
 		}
 	}
 

@@ -349,7 +349,10 @@ func (s *SleuthVault) GetVersionList(ctx context.Context, name string) ([]string
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("%w: %s", ErrAssetNotFound, strings.TrimSpace(string(body)))
+		}
+		return nil, httpStatusError(resp.StatusCode, body)
 	}
 
 	// Read plain text response (newline-separated versions)

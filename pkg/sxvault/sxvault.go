@@ -170,10 +170,6 @@ type sleuthAgentAssetCreator interface {
 	CreateAgentAsset(ctx context.Context, name, description, rawContent, botName string) (vault.AddAssetResult, error)
 }
 
-type sleuthAgentInstaller interface {
-	InstallAgentAssetToBot(ctx context.Context, agentName, botName string) error
-}
-
 type BotSummary struct {
 	Name            string
 	Slug            string
@@ -474,19 +470,15 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 	// fills it from spec.AssetName when the vault didn't provide one).
 	agentName := upload.Name
 	// Mirror PutSkillZip for backends that publish with a default org-wide
-	// install. Skills.new agent creation uses an initial bot installation and
-	// leaves IsFirstVersion false, so it skips this clearing path.
-	if upload.IsFirstVersion {
+	// install. Skills.new agent creation uses an initial bot installation, so
+	// agentInstalled skips this clearing path even though it created version 1.
+	if upload.IsFirstVersion && !agentInstalled {
 		if err := c.v.ClearAssetInstallations(ctx, agentName); err != nil {
 			return AgentResult{}, fmt.Errorf("sxvault: clearing default installations for %q: %w", agentName, err)
 		}
 	}
 	if !agentInstalled {
-		if installer, ok := c.v.(sleuthAgentInstaller); ok {
-			err = installer.InstallAgentAssetToBot(ctx, agentName, spec.BotName)
-		} else {
-			err = c.installAssetToBot(ctx, agentName, spec.BotName)
-		}
+		err = c.installAssetToBot(ctx, agentName, spec.BotName)
 		if err != nil {
 			return AgentResult{}, fmt.Errorf("sxvault: installing agent %q on bot %q: %w", agentName, spec.BotName, err)
 		}
@@ -501,11 +493,18 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 
 func (c *Client) putAgentAsset(ctx context.Context, spec AgentSpec) (vault.AddAssetResult, bool, error) {
 	if creator, ok := c.v.(sleuthAgentAssetCreator); ok {
-		if versions, err := c.v.GetVersionList(ctx, spec.AssetName); err == nil && len(versions) > 0 {
-			return vault.AddAssetResult{
-				Name:    spec.AssetName,
-				Version: highestSemver(versions),
-			}, false, nil
+		versions, err := c.v.GetVersionList(ctx, spec.AssetName)
+		if err != nil && !errors.Is(err, vault.ErrAssetNotFound) {
+			return vault.AddAssetResult{}, false, err
+		}
+		if len(versions) > 0 {
+			zipData, err := agentZip(spec)
+			if err != nil {
+				return vault.AddAssetResult{}, false, err
+			}
+			ast := &lockfile.Asset{Name: spec.AssetName, Version: spec.Version, Type: asset.TypeAgent}
+			upload, err := c.addAssetWithResult(ctx, ast, zipData)
+			return upload, false, err
 		}
 		upload, err := creator.CreateAgentAsset(ctx, spec.AssetName, agentDescription(spec), agentMarkdown(spec), spec.BotName)
 		return upload, err == nil, err
@@ -1039,7 +1038,7 @@ func agentDescription(spec AgentSpec) string {
 			return out
 		}
 	}
-	return "Custom agent"
+	return ""
 }
 
 func agentMarkdown(spec AgentSpec) string {

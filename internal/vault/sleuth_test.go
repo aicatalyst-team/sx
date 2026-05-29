@@ -649,6 +649,7 @@ func TestSleuthVault_ClearAssetInstallationsIgnoresMissingBotInstall(t *testing.
 								"id":         "skill-1",
 								"name":       "Database migrations",
 								"slug":       "database-migrations",
+								"type":       "SKILL",
 							},
 						},
 					},
@@ -695,7 +696,81 @@ func TestSleuthVault_ClearAssetInstallationsIgnoresMissingBotInstall(t *testing.
 	for _, rec := range *records {
 		ops = append(ops, rec.OperationName)
 	}
-	if got := strings.Join(ops, ","); got != "ListBots,BotInstalled,AssetGID,UninstallSkillFromBot,RemoveAssetInstallations" {
+	if got := strings.Join(ops, ","); got != "AssetGID,ListBots,BotInstalled,UninstallSkillFromBot,RemoveAssetInstallations" {
+		t.Fatalf("operations = %s", got)
+	}
+}
+
+func TestSleuthVault_ClearAssetInstallationsFiltersBotInstallsByAssetType(t *testing.T) {
+	srv, records := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"AssetGID": func(vars map[string]any) any {
+			return map[string]any{
+				"vault": map[string]any{
+					"assets": map[string]any{
+						"nodes": []any{
+							map[string]any{
+								"__typename": "Skill",
+								"id":         "skill-1",
+								"name":       "Foo",
+								"slug":       "foo",
+								"type":       "SKILL",
+							},
+						},
+					},
+				},
+			}
+		},
+		"ListBots": func(vars map[string]any) any {
+			return map[string]any{
+				"bots": []any{
+					map[string]any{
+						"id":              "bot-1",
+						"name":            "testers",
+						"slug":            "testers",
+						"description":     "Tests stuff",
+						"teams":           []any{},
+						"installedSkills": []any{},
+					},
+				},
+			}
+		},
+		"BotInstalled": func(vars map[string]any) any {
+			return map[string]any{
+				"bot": map[string]any{
+					"installedSkills": []any{
+						map[string]any{
+							"name":            "foo",
+							"assetType":       "AGENT",
+							"isDirectInstall": true,
+						},
+					},
+				},
+			}
+		},
+		"UninstallSkillFromBot": func(vars map[string]any) any {
+			t.Fatal("UninstallSkillFromBot should not run for a different asset type")
+			return nil
+		},
+		"RemoveAssetInstallations": func(vars map[string]any) any {
+			return map[string]any{
+				"removeAssetInstallations": map[string]any{
+					"success": true,
+					"errors":  []any{},
+				},
+			}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	if err := v.ClearAssetInstallations(context.Background(), "foo"); err != nil {
+		t.Fatalf("ClearAssetInstallations failed: %v", err)
+	}
+
+	var ops []string
+	for _, rec := range *records {
+		ops = append(ops, rec.OperationName)
+	}
+	if got := strings.Join(ops, ","); got != "AssetGID,ListBots,BotInstalled,RemoveAssetInstallations" {
 		t.Fatalf("operations = %s", got)
 	}
 }

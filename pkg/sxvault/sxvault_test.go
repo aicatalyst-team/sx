@@ -67,6 +67,30 @@ func hasDirectBotSkill(skills []BotSkillSummary, name string) bool {
 	return false
 }
 
+func zipContains(t *testing.T, data []byte, path, want string) bool {
+	t.Helper()
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("read zip: %v", err)
+	}
+	for _, file := range zr.File {
+		if file.Name != path {
+			continue
+		}
+		rc, err := file.Open()
+		if err != nil {
+			t.Fatalf("open %s: %v", path, err)
+		}
+		defer rc.Close()
+		body, err := io.ReadAll(rc)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		return strings.Contains(string(body), want)
+	}
+	return false
+}
+
 func TestAgentMarkdownPreservesExistingFrontmatter(t *testing.T) {
 	got := agentMarkdown(AgentSpec{
 		AssetName:   "reviewer",
@@ -392,7 +416,7 @@ func TestPutSkillZipWithBotClearsDefaultUploadInstall(t *testing.T) {
 	if !got.IsFirstVersion {
 		t.Fatalf("PutSkillZipWithResult IsFirstVersion = false, want true")
 	}
-	wantOps := "ListBots,ListBots,BotInstalled,RemoveAssetInstallations,ListBots,AssetGID,InstallSkillToBot"
+	wantOps := "ListBots,AssetGID,ListBots,BotInstalled,RemoveAssetInstallations,ListBots,AssetGID,InstallSkillToBot"
 	if gotOps := strings.Join(ops, ","); gotOps != wantOps {
 		t.Fatalf("GraphQL ops = %s, want %s", gotOps, wantOps)
 	}
@@ -465,13 +489,48 @@ func TestPutAgentCreatesSleuthAgentViaGraphQL(t *testing.T) {
 	}
 }
 
-func TestPutAgentInstallsExistingSleuthAgentViaUpdateAsset(t *testing.T) {
+func TestPutAgentRepublishesExistingSleuthAgentAndInstallsAdditively(t *testing.T) {
 	ctx := context.Background()
 	var ops []string
+	var postedName, postedVersion, postedType string
+	var postedZip []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/skills/assets/my-agent_agent/list.txt":
 			_, _ = w.Write([]byte("1\n"))
+		case "/api/skills/assets":
+			if r.Method != http.MethodPost {
+				http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+				return
+			}
+			if err := r.ParseMultipartForm(10 << 20); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			postedName = r.FormValue("name")
+			postedVersion = r.FormValue("version")
+			postedType = r.FormValue("type")
+			file, _, err := r.FormFile("file")
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			defer file.Close()
+			postedZip, err = io.ReadAll(file)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"asset": map[string]any{
+					"name":    "my-agent_agent",
+					"version": "2",
+					"url":     "/api/skills/assets/my-agent_agent/2/archive.zip",
+				},
+			})
 		case "/graphql":
 			var req struct {
 				OperationName string         `json:"operationName"`
@@ -482,18 +541,12 @@ func TestPutAgentInstallsExistingSleuthAgentViaUpdateAsset(t *testing.T) {
 				return
 			}
 			ops = append(ops, req.OperationName)
-			if req.OperationName == "UpdateAssetBotInstallation" {
-				input, _ := req.Variables["input"].(map[string]any)
-				if input["id"] != "agent-1" {
-					t.Fatalf("UpdateAssetBotInstallation id = %v, want agent-1", input["id"])
+			if req.OperationName == "InstallSkillToBot" {
+				if got := req.Variables["botId"]; got != "bot-1" {
+					t.Fatalf("InstallSkillToBot botId = %v, want bot-1", got)
 				}
-				installations, _ := input["installations"].([]any)
-				if len(installations) != 1 {
-					t.Fatalf("UpdateAssetBotInstallation installations = %#v, want one bot installation", input["installations"])
-				}
-				installation, _ := installations[0].(map[string]any)
-				if installation["entityType"] != "BOT" || installation["entityId"] != "bot-1" {
-					t.Fatalf("UpdateAssetBotInstallation target = %#v, want bot-1", installation)
+				if got := req.Variables["skillId"]; got != "agent-1" {
+					t.Fatalf("InstallSkillToBot skillId = %v, want agent-1", got)
 				}
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -511,8 +564,8 @@ func TestPutAgentInstallsExistingSleuthAgentViaUpdateAsset(t *testing.T) {
 	got, err := client.PutAgent(ctx, AgentSpec{
 		BotName:   "reviewer",
 		AssetName: "my-agent_agent",
-		Version:   "1",
-		Prompt:    "You are an agent.",
+		Version:   "2",
+		Prompt:    "You are an updated agent.",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -520,9 +573,61 @@ func TestPutAgentInstallsExistingSleuthAgentViaUpdateAsset(t *testing.T) {
 	if got.AgentName != "my-agent_agent" {
 		t.Fatalf("AgentName = %q, want requested existing asset name", got.AgentName)
 	}
-	wantOps := "ListBots,ListBots,AssetGID,UpdateAssetBotInstallation"
+	if postedName != "my-agent_agent" || postedVersion != "2" || postedType != "agent" {
+		t.Fatalf("posted asset fields = name:%q version:%q type:%q", postedName, postedVersion, postedType)
+	}
+	if !zipContains(t, postedZip, "AGENT.md", "You are an updated agent.") {
+		t.Fatal("posted agent zip did not contain updated AGENT.md prompt")
+	}
+	wantOps := "ListBots,ListBots,AssetGID,InstallSkillToBot"
 	if gotOps := strings.Join(ops, ","); gotOps != wantOps {
 		t.Fatalf("GraphQL ops = %s, want %s", gotOps, wantOps)
+	}
+}
+
+func TestPutAgentPropagatesSleuthVersionListErrors(t *testing.T) {
+	ctx := context.Background()
+	var ops []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/skills/assets/my-agent_agent/list.txt":
+			http.Error(w, "upstream unavailable", http.StatusBadGateway)
+		case "/graphql":
+			var req struct {
+				OperationName string         `json:"operationName"`
+				Variables     map[string]any `json:"variables"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if req.OperationName == "CreateAgentAsset" {
+				t.Fatal("CreateAgentAsset should not run after a version-list failure")
+			}
+			ops = append(ops, req.OperationName)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": sxvaultAgentGraphQLResponse(t, req.OperationName, req.Variables)})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := OpenSkillsNew(srv.URL, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.PutAgent(ctx, AgentSpec{
+		BotName:   "reviewer",
+		AssetName: "my-agent_agent",
+		Version:   "2",
+		Prompt:    "You are an agent.",
+	})
+	if err == nil || !strings.Contains(err.Error(), "HTTP 502") {
+		t.Fatalf("PutAgent error = %v, want HTTP 502", err)
+	}
+	if gotOps := strings.Join(ops, ","); gotOps != "ListBots" {
+		t.Fatalf("GraphQL ops = %s, want only EnsureBot ListBots", gotOps)
 	}
 }
 
@@ -572,6 +677,7 @@ func sxvaultAgentGraphQLResponse(t *testing.T, operation string, vars map[string
 							"id":         "agent-1",
 							"name":       "My Agent",
 							"slug":       "my-agent_agent",
+							"type":       "AGENT",
 						},
 					},
 				},
@@ -580,20 +686,6 @@ func sxvaultAgentGraphQLResponse(t *testing.T, operation string, vars map[string
 	case "InstallSkillToBot":
 		return map[string]any{
 			"installSkillToBot": map[string]any{"success": true, "errors": []any{}},
-		}
-	case "UpdateAssetBotInstallation":
-		return map[string]any{
-			"updateAsset": map[string]any{
-				"asset": map[string]any{
-					"__typename":    "Agent",
-					"id":            "agent-1",
-					"name":          "My Agent",
-					"slug":          "my-agent_agent",
-					"type":          "AGENT",
-					"latestVersion": "1",
-				},
-				"errors": []any{},
-			},
 		}
 	default:
 		t.Fatalf("unexpected GraphQL operation %q", operation)
@@ -691,6 +783,7 @@ func sxvaultRepublishGraphQLResponse(t *testing.T, operation string, vars map[st
 							"id":         "skill-foo",
 							"name":       "Foo",
 							"slug":       "foo_skill",
+							"type":       "SKILL",
 						},
 					},
 				},
@@ -764,6 +857,7 @@ func sxvaultTestGraphQLResponse(t *testing.T, operation string, vars map[string]
 							"id":         "skill-1",
 							"name":       "Copied Skill",
 							"slug":       "copied-skill",
+							"type":       "SKILL",
 						},
 					},
 				},

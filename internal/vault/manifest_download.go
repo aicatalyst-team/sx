@@ -9,19 +9,20 @@ import (
 	"github.com/sleuth-io/sx/internal/manifest"
 	"github.com/sleuth-io/sx/internal/metadata"
 	"github.com/sleuth-io/sx/internal/utils"
+	"github.com/sleuth-io/sx/internal/version"
 )
 
 func manifestAssetVersions(vaultRoot, name string) ([]string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return nil, nil
+		return []string{}, nil
 	}
 	m, ok, err := manifest.Load(vaultRoot)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
-		return nil, nil
+		return []string{}, nil
 	}
 	versions := []string{}
 	for _, asset := range m.Assets {
@@ -30,7 +31,7 @@ func manifestAssetVersions(vaultRoot, name string) ([]string, error) {
 		}
 		versions = append(versions, asset.Version)
 	}
-	return versions, nil
+	return version.Sort(versions), nil
 }
 
 func findAssetVersionInManifest(vaultRoot, name, version string) (*lockfile.Asset, bool, error) {
@@ -46,11 +47,18 @@ func findAssetVersionInManifest(vaultRoot, name, version string) (*lockfile.Asse
 	if !ok {
 		return nil, false, nil
 	}
+	var found *lockfile.Asset
 	for _, asset := range m.Assets {
 		if asset.Name == name && asset.Version == version {
 			out := manifestAssetToLockfile(asset)
-			return &out, true, nil
+			if found != nil {
+				return nil, false, fmt.Errorf("duplicate manifest asset %q version %q", name, version)
+			}
+			found = &out
 		}
+	}
+	if found != nil {
+		return found, true, nil
 	}
 	return nil, false, nil
 }
