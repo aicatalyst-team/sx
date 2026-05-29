@@ -316,7 +316,7 @@ func (s *SleuthVault) RemoveAssetInstallation(ctx context.Context, assetName str
 	if err != nil {
 		return err
 	}
-	return s.uninstallSkillFromBot(ctx, skillGID, botGID)
+	return s.uninstallSkillFromBot(ctx, skillGID, botGID, false)
 }
 
 // ---- Bot management (via the existing skills.new GraphQL surface) ----
@@ -724,10 +724,13 @@ func (s *SleuthVault) installSkillToBot(ctx context.Context, assetName, botName 
 	return nil
 }
 
-// uninstallSkillFromBot is the inverse of installSkillToBot. Used by
-// ClearAssetInstallations to drop bot installs alongside the
-// non-bot scopes that removeAssetInstallations handles.
-func (s *SleuthVault) uninstallSkillFromBot(ctx context.Context, skillGID, botGID string) error {
+// uninstallSkillFromBot is the inverse of installSkillToBot. When
+// missingOK is true, a false/no-errors response is treated as an
+// idempotent no-op: Pulse reports success=false when no bot installation
+// row was deleted, which is acceptable during cleanup flows such as
+// ClearAssetInstallations. Explicit RemoveAssetInstallation calls pass
+// missingOK=false so unexpected no-op removals still surface.
+func (s *SleuthVault) uninstallSkillFromBot(ctx context.Context, skillGID, botGID string, missingOK bool) error {
 	resp, err := vaultgql.UninstallSkillFromBot(ctx, s.gqlClient(), botGID, skillGID)
 	if err != nil {
 		return err
@@ -739,6 +742,9 @@ func (s *SleuthVault) uninstallSkillFromBot(ctx context.Context, skillGID, botGI
 		return err
 	}
 	if !resp.UninstallSkillFromBot.Success {
+		if missingOK {
+			return nil
+		}
 		return errors.New("uninstallSkillFromBot reported success=false with no errors — possible schema drift")
 	}
 	return nil
@@ -1055,7 +1061,7 @@ func (s *SleuthVault) ClearAssetInstallations(ctx context.Context, assetName str
 			return err
 		}
 		for _, botGID := range botGIDs {
-			if err := s.uninstallSkillFromBot(ctx, skillGID, botGID); err != nil {
+			if err := s.uninstallSkillFromBot(ctx, skillGID, botGID, true); err != nil {
 				return fmt.Errorf("uninstalling %q from bot %s: %w", assetName, botGID, err)
 			}
 		}

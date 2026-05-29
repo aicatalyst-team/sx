@@ -604,6 +604,102 @@ func TestSleuthVault_InstallSkillToBot_PrefersSlugOverName(t *testing.T) {
 	}
 }
 
+func TestSleuthVault_ClearAssetInstallationsIgnoresMissingBotInstall(t *testing.T) {
+	srv, records := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
+		"ListBots": func(vars map[string]any) any {
+			return map[string]any{
+				"bots": []any{
+					map[string]any{
+						"id":              "bot-1",
+						"name":            "testers",
+						"slug":            "testers",
+						"description":     "Tests stuff",
+						"teams":           []any{},
+						"installedSkills": []any{},
+					},
+				},
+			}
+		},
+		"BotInstalled": func(vars map[string]any) any {
+			if got := vars["slug"]; got != "testers" {
+				t.Fatalf("BotInstalled slug = %v, want testers", got)
+			}
+			return map[string]any{
+				"bot": map[string]any{
+					"installedSkills": []any{
+						map[string]any{
+							"name":            "database-migrations",
+							"assetType":       "SKILL",
+							"isDirectInstall": true,
+						},
+					},
+				},
+			}
+		},
+		"AssetGID": func(vars map[string]any) any {
+			if got := vars["search"]; got != "database-migrations" {
+				t.Fatalf("AssetGID search = %v, want database-migrations", got)
+			}
+			return map[string]any{
+				"vault": map[string]any{
+					"assets": map[string]any{
+						"nodes": []any{
+							map[string]any{
+								"__typename": "Skill",
+								"id":         "skill-1",
+								"name":       "Database migrations",
+								"slug":       "database-migrations",
+							},
+						},
+					},
+				},
+			}
+		},
+		"UninstallSkillFromBot": func(vars map[string]any) any {
+			if got := vars["botId"]; got != "bot-1" {
+				t.Fatalf("UninstallSkillFromBot botId = %v, want bot-1", got)
+			}
+			if got := vars["skillId"]; got != "skill-1" {
+				t.Fatalf("UninstallSkillFromBot skillId = %v, want skill-1", got)
+			}
+			return map[string]any{
+				"uninstallSkillFromBot": map[string]any{
+					"success": false,
+					"errors":  []any{},
+				},
+			}
+		},
+		"RemoveAssetInstallations": func(vars map[string]any) any {
+			input, ok := vars["input"].(map[string]any)
+			if !ok {
+				t.Fatalf("RemoveAssetInstallations input = %T, want object", vars["input"])
+			}
+			if got := input["assetName"]; got != "database-migrations" {
+				t.Fatalf("RemoveAssetInstallations assetName = %v, want database-migrations", got)
+			}
+			return map[string]any{
+				"removeAssetInstallations": map[string]any{
+					"success": true,
+					"errors":  []any{},
+				},
+			}
+		},
+	})
+
+	v := NewSleuthVault(srv.URL, "test-token")
+	if err := v.ClearAssetInstallations(context.Background(), "database-migrations"); err != nil {
+		t.Fatalf("ClearAssetInstallations failed: %v", err)
+	}
+
+	var ops []string
+	for _, rec := range *records {
+		ops = append(ops, rec.OperationName)
+	}
+	if got := strings.Join(ops, ","); got != "ListBots,BotInstalled,AssetGID,UninstallSkillFromBot,RemoveAssetInstallations" {
+		t.Fatalf("operations = %s", got)
+	}
+}
+
 // TestSleuthVault_AddAsset_ConflictByStatusCarriesSlug verifies that an
 // HTTP 409 is treated as a version conflict even when the error message is
 // reworded (not containing "already exists"), and that the persisted slug
