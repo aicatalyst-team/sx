@@ -261,6 +261,85 @@ func TestDeleteBotRemovesBotAndBotScopes(t *testing.T) {
 	assertFileContains(t, filepath.Join(clone, "assets", "lint-helper", "1", "SKILL.md"), "Lint carefully.")
 }
 
+func TestDeleteAssetRemovesGitVaultFilesAndManifest(t *testing.T) {
+	ctx := context.Background()
+	remote, client := newGitVaultClient(t)
+
+	if _, err := client.PutAgent(ctx, AgentSpec{
+		BotName:        "reviewer-bot",
+		AssetName:      "reviewer-agent",
+		Version:        "1",
+		Description:    "Reviews pull requests.",
+		BotDescription: "Reviewer bot.",
+		Prompt:         "You are Reviewer.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.DeleteAsset(ctx, "reviewer-agent"); err != nil {
+		t.Fatal(err)
+	}
+
+	clone := cloneRemote(t, remote)
+	manifest := readFile(t, filepath.Join(clone, "sx.toml"))
+	if strings.Contains(manifest, `name = "reviewer-agent"`) {
+		t.Fatalf("sx.toml still contains deleted asset:\n%s", manifest)
+	}
+	if _, err := os.Stat(filepath.Join(clone, "assets", "reviewer-agent")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted asset directory stat error = %v, want not exist", err)
+	}
+}
+
+func TestDeleteAssetForSkillsNewRequestsPermanentDelete(t *testing.T) {
+	ctx := context.Background()
+	var sawDelete bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/graphql" {
+			http.NotFound(w, r)
+			return
+		}
+		var req struct {
+			OperationName string         `json:"operationName"`
+			Variables     map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.OperationName != "RemoveAssetInstallations" {
+			t.Fatalf("GraphQL operation = %q, want RemoveAssetInstallations", req.OperationName)
+		}
+		input, _ := req.Variables["input"].(map[string]any)
+		if got := input["assetName"]; got != "reviewer-agent" {
+			t.Fatalf("assetName = %v, want reviewer-agent", got)
+		}
+		if got := input["delete"]; got != true {
+			t.Fatalf("delete = %v, want true", got)
+		}
+		sawDelete = true
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"removeAssetInstallations": map[string]any{
+					"success": true,
+					"errors":  []any{},
+				},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := OpenSkillsNew(srv.URL, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.DeleteAsset(ctx, "reviewer-agent"); err != nil {
+		t.Fatal(err)
+	}
+	if !sawDelete {
+		t.Fatal("DeleteAsset did not call RemoveAssetInstallations")
+	}
+}
+
 func TestPutAgentSameVersionIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	remote, client := newGitVaultClient(t)

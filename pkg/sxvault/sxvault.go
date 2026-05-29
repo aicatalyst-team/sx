@@ -2,7 +2,7 @@
 //
 // Scope: this facade currently covers the publish / manage write path
 // (OpenSkillsNew / OpenGit / OpenPath constructors; EnsureBot, DeleteBot,
-// PutAgent, PutSkillZip, InstallAssetToBot mutators) plus read-only browse
+// DeleteAsset, PutAgent, PutSkillZip, InstallAssetToBot mutators) plus read-only browse
 // and download (ListAssets, GetAssetZip). GetAssetZip is the one narrow
 // read path: it wraps the internal GetMetadata / GetAssetByVersion calls
 // and exposes only the asset type, description, and raw zip bytes through
@@ -812,6 +812,22 @@ func (c *Client) UninstallAssetFromBot(ctx context.Context, assetName, botName s
 		Kind: vault.InstallKindBot,
 		Bot:  botName,
 	})
+}
+
+// DeleteAsset removes all versions of the named asset from the vault.
+//
+// Git and path vaults remove the asset from sx.toml and delete the asset
+// files from the current vault tip. Skills.new removes the asset and its
+// installations server-side. Git history may still contain older commits.
+func (c *Client) DeleteAsset(ctx context.Context, assetName string) error {
+	if c == nil || c.v == nil {
+		return errors.New("sxvault: nil client")
+	}
+	assetName = strings.TrimSpace(assetName)
+	if assetName == "" {
+		return errors.New("sxvault: asset name required")
+	}
+	return c.v.RemoveAsset(c.actorContext(ctx), assetName, "", true)
 }
 
 // installAssetToBot is the actor-wrapped-context internal form. Callers
