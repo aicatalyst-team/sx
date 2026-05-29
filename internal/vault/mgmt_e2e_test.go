@@ -846,7 +846,7 @@ func TestPathVault_SetAssetInstallationRepairsOrphanedStoredAsset(t *testing.T) 
 	var recovered, installed bool
 	for _, event := range events {
 		switch event.Event {
-		case mgmt.EventAssetCreated:
+		case mgmt.EventAssetRecovered:
 			recovered = event.TargetType == mgmt.TargetTypeAsset &&
 				event.Data["recovered_from_storage"] == true &&
 				event.Data["version"] == "1"

@@ -671,7 +671,7 @@ func (s *SleuthVault) assetInfoByName(ctx context.Context, name string) (assetID
 	}
 	switch len(nameMatches) {
 	case 0:
-		return assetIDMatch{}, fmt.Errorf("asset %q not found", name)
+		return assetIDMatch{}, fmt.Errorf("%w: asset %q", ErrAssetNotFound, name)
 	case 1:
 		return nameMatches[0], nil
 	default:

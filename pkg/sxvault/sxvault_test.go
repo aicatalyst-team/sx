@@ -314,6 +314,65 @@ func TestDeleteAssetMissingGitVaultAssetReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestDeleteAssetMissingPathVaultAssetReturnsNotFound(t *testing.T) {
+	client, err := OpenPath(t.TempDir(), PathOptions{
+		Actor: Actor{Email: "test@example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = client.DeleteAsset(context.Background(), "missing-agent")
+	if !errors.Is(err, vault.ErrAssetNotFound) {
+		t.Fatalf("DeleteAsset missing asset error = %v, want ErrAssetNotFound", err)
+	}
+}
+
+func TestDeleteAssetMissingSkillsNewAssetReturnsNotFound(t *testing.T) {
+	ctx := context.Background()
+	var ops []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/graphql" {
+			http.NotFound(w, r)
+			return
+		}
+		var req struct {
+			OperationName string `json:"operationName"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		ops = append(ops, req.OperationName)
+		w.Header().Set("Content-Type", "application/json")
+		switch req.OperationName {
+		case "AssetGID":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"vault": map[string]any{
+						"assets": map[string]any{"nodes": []any{}},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected GraphQL operation %q", req.OperationName)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := OpenSkillsNew(srv.URL, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.DeleteAsset(ctx, "missing-agent")
+	if !errors.Is(err, vault.ErrAssetNotFound) {
+		t.Fatalf("DeleteAsset missing asset error = %v, want ErrAssetNotFound", err)
+	}
+	if got := strings.Join(ops, ","); got != "AssetGID" {
+		t.Fatalf("GraphQL ops = %s, want AssetGID", got)
+	}
+}
+
 func TestDeleteAssetForSkillsNewRequestsPermanentDelete(t *testing.T) {
 	ctx := context.Background()
 	var ops []string
