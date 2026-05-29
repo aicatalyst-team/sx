@@ -156,6 +156,10 @@ type AgentSpec struct {
 }
 
 type AgentResult struct {
+	// AgentName is the canonical agent asset name persisted by the vault.
+	// Backends may normalize the requested AgentSpec.AssetName; callers
+	// should store this value as their persona asset reference when non-empty.
+	AgentName string
 	// BotKey is the one-time raw bot API token returned only when PutAgent
 	// creates a new bot in a vault type that issues bot tokens. It is empty
 	// when the bot already exists and for file-backed Git vaults.
@@ -408,11 +412,8 @@ func (c *Client) ensureBot(ctx context.Context, bot Bot) (string, error) {
 	})
 }
 
-// PutAgent uploads an agent asset and installs any listed skills on the named
-// bot. File-backed vaults also record a bot scope on the agent asset itself;
-// the Skills.new backend does not expose an agent-to-bot install mutation, so
-// there the agent asset is stored as a standalone prompt record while skills
-// are installed to the bot.
+// PutAgent uploads an agent asset, installs that agent asset on the named bot,
+// and installs any listed skills on the same bot.
 //
 // Re-publishing an existing AssetName@Version is idempotent for the manifest:
 // the version is listed once and installations are re-run, which also makes
@@ -423,18 +424,16 @@ func (c *Client) ensureBot(ctx context.Context, bot Bot) (string, error) {
 // guaranteed update across all backends.
 //
 // PutAgent is NOT transactional. The flow runs as: EnsureBot → validate
-// skills → upload asset → install agent on bot when supported → install each skill on bot.
+// skills → upload asset → install agent on bot → install each skill on bot.
 // If any step after the asset upload fails (e.g. a transient git push race
 // on the Nth skill), partial install state is left in the vault. Every step
 // is idempotent, so the caller should retry the same PutAgent call to
 // converge — the asset upload no-ops on version match and the install path
 // is an upsert.
 //
-// Unlike PutSkillZip there is no PutAgentWithResult: the persisted agent
-// slug and the upload's IsFirstVersion flag are consumed internally (the
-// latter to clear the default org install before the bot install) but are
-// not surfaced to callers yet. Add a WithResult variant if a consumer needs
-// that observability.
+// The returned AgentResult.AgentName is the canonical persisted agent asset
+// slug. Callers should keep only that light reference locally for later runtime
+// lookup instead of storing the full agent prompt.
 func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, error) {
 	if c == nil || c.v == nil {
 		return AgentResult{}, errors.New("sxvault: nil client")
@@ -479,17 +478,15 @@ func (c *Client) PutAgent(ctx context.Context, spec AgentSpec) (AgentResult, err
 			return AgentResult{}, fmt.Errorf("sxvault: clearing default installations for %q: %w", agentName, err)
 		}
 	}
-	if shouldInstallAgentAssetToBot(c.v) {
-		if err := c.installAssetToBot(ctx, agentName, spec.BotName); err != nil {
-			return AgentResult{}, fmt.Errorf("sxvault: installing agent %q on bot %q: %w", agentName, spec.BotName, err)
-		}
+	if err := c.installAssetToBot(ctx, agentName, spec.BotName); err != nil {
+		return AgentResult{}, fmt.Errorf("sxvault: installing agent %q on bot %q: %w", agentName, spec.BotName, err)
 	}
 	for _, skill := range skills {
 		if err := c.installAssetToBot(ctx, skill, spec.BotName); err != nil {
 			return AgentResult{}, fmt.Errorf("sxvault: installing skill %q on bot %q: %w", skill, spec.BotName, err)
 		}
 	}
-	return AgentResult{BotKey: botKey}, nil
+	return AgentResult{AgentName: agentName, BotKey: botKey}, nil
 }
 
 func (c *Client) putAgentAsset(ctx context.Context, spec AgentSpec) (vault.AddAssetResult, error) {
@@ -508,11 +505,6 @@ func (c *Client) putAgentAsset(ctx context.Context, spec AgentSpec) (vault.AddAs
 	}
 	ast := &lockfile.Asset{Name: spec.AssetName, Version: spec.Version, Type: asset.TypeAgent}
 	return c.addAssetWithResult(ctx, ast, zipData)
-}
-
-func shouldInstallAgentAssetToBot(v vault.Vault) bool {
-	_, isSleuth := v.(*vault.SleuthVault)
-	return !isSleuth
 }
 
 // validateSkillExists asserts the named asset is a published skill in the

@@ -399,10 +399,9 @@ func TestPutSkillZipWithBotClearsDefaultUploadInstall(t *testing.T) {
 }
 
 // TestPutAgentCreatesSleuthAgentViaGraphQL verifies PutAgent uses the
-// Skills.new-native createAsset(rawContent) path for agent assets, then strips
-// the server's default org-wide install. Skills.new does not expose an
-// agent-to-bot install mutation, so the created agent asset is not routed
-// through installSkillToBot.
+// Skills.new-native createAsset(rawContent) path for agent assets, strips the
+// server's default org-wide install, and installs the created agent asset on
+// the bot.
 func TestPutAgentCreatesSleuthAgentViaGraphQL(t *testing.T) {
 	ctx := context.Background()
 	var clearedAsset string
@@ -437,18 +436,22 @@ func TestPutAgentCreatesSleuthAgentViaGraphQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.PutAgent(ctx, AgentSpec{
+	got, err := client.PutAgent(ctx, AgentSpec{
 		BotName:   "reviewer",
 		AssetName: "my-agent",
 		Version:   "1",
 		Prompt:    "You are an agent.",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if got.AgentName != "my-agent_agent" {
+		t.Fatalf("AgentName = %q, want server slug my-agent_agent", got.AgentName)
 	}
 	if clearedAsset != "my-agent_agent" {
 		t.Fatalf("ClearAssetInstallations asset = %q, want server slug my-agent_agent", clearedAsset)
 	}
-	wantOps := "ListBots,CreateAgentAsset,ListBots,BotInstalled,RemoveAssetInstallations"
+	wantOps := "ListBots,CreateAgentAsset,ListBots,BotInstalled,RemoveAssetInstallations,ListBots,AssetGID,InstallSkillToBot"
 	if gotOps := strings.Join(ops, ","); gotOps != wantOps {
 		t.Fatalf("GraphQL ops = %s, want %s", gotOps, wantOps)
 	}
@@ -659,6 +662,7 @@ func sxvaultTestGraphQLResponse(t *testing.T, operation string, vars map[string]
 				"installedSkills": []any{
 					map[string]any{
 						"name":            "copied-skill",
+						"assetType":       "SKILL",
 						"isDirectInstall": false,
 					},
 				},

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sleuth-io/sx/internal/asset"
 	"github.com/sleuth-io/sx/internal/logger"
 	"github.com/sleuth-io/sx/internal/mgmt"
 	vaultgql "github.com/sleuth-io/sx/internal/vault/graphql"
@@ -381,12 +382,17 @@ func (s *SleuthVault) listBotNodes(ctx context.Context) ([]sleuthBotNode, error)
 	return nodes, nil
 }
 
-// cleanBotSkills dedupes a bot's installed skills by name, OR-ing the
+// cleanBotSkills dedupes a bot's installed skill assets by name, OR-ing the
 // IsDirectInstall flag across duplicate entries, and returns them sorted by
-// name.
+// name. The server field is historically named installedSkills but may carry
+// non-skill assets; keep this projection skill-only so consumers don't render
+// installed agent prompt files as installed skills.
 func cleanBotSkills(skills []vaultgql.ListBotsBotsManagedBotInstalledSkillsBotInstalledSkill) []mgmt.BotSkill {
 	byName := make(map[string]bool, len(skills))
 	for _, skill := range skills {
+		if !isSleuthAssetType(skill.AssetType, asset.TypeSkill.Key) {
+			continue
+		}
 		name := strings.TrimSpace(skill.Name)
 		if name == "" {
 			continue
@@ -401,6 +407,10 @@ func cleanBotSkills(skills []vaultgql.ListBotsBotsManagedBotInstalledSkillsBotIn
 		return strings.Compare(a.Name, b.Name)
 	})
 	return out
+}
+
+func isSleuthAssetType(got, want string) bool {
+	return strings.EqualFold(strings.TrimSpace(got), strings.TrimSpace(want))
 }
 
 func warnIfBotListSoftCap(nodes []sleuthBotNode) {

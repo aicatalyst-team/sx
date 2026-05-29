@@ -612,11 +612,17 @@ func (v *BotInstalledBotManagedBot) GetInstalledSkills() []BotInstalledBotManage
 // Lightweight skill info for display on bot detail page.
 type BotInstalledBotManagedBotInstalledSkillsBotInstalledSkill struct {
 	Name            string `json:"name"`
+	AssetType       string `json:"assetType"`
 	IsDirectInstall bool   `json:"isDirectInstall"`
 }
 
 // GetName returns BotInstalledBotManagedBotInstalledSkillsBotInstalledSkill.Name, and is useful for accessing the field via an interface.
 func (v *BotInstalledBotManagedBotInstalledSkillsBotInstalledSkill) GetName() string { return v.Name }
+
+// GetAssetType returns BotInstalledBotManagedBotInstalledSkillsBotInstalledSkill.AssetType, and is useful for accessing the field via an interface.
+func (v *BotInstalledBotManagedBotInstalledSkillsBotInstalledSkill) GetAssetType() string {
+	return v.AssetType
+}
 
 // GetIsDirectInstall returns BotInstalledBotManagedBotInstalledSkillsBotInstalledSkill.IsDirectInstall, and is useful for accessing the field via an interface.
 func (v *BotInstalledBotManagedBotInstalledSkillsBotInstalledSkill) GetIsDirectInstall() bool {
@@ -1673,11 +1679,17 @@ func (v *ListBotsBotsManagedBot) GetInstalledSkills() []ListBotsBotsManagedBotIn
 // Lightweight skill info for display on bot detail page.
 type ListBotsBotsManagedBotInstalledSkillsBotInstalledSkill struct {
 	Name            string `json:"name"`
+	AssetType       string `json:"assetType"`
 	IsDirectInstall bool   `json:"isDirectInstall"`
 }
 
 // GetName returns ListBotsBotsManagedBotInstalledSkillsBotInstalledSkill.Name, and is useful for accessing the field via an interface.
 func (v *ListBotsBotsManagedBotInstalledSkillsBotInstalledSkill) GetName() string { return v.Name }
+
+// GetAssetType returns ListBotsBotsManagedBotInstalledSkillsBotInstalledSkill.AssetType, and is useful for accessing the field via an interface.
+func (v *ListBotsBotsManagedBotInstalledSkillsBotInstalledSkill) GetAssetType() string {
+	return v.AssetType
+}
 
 // GetIsDirectInstall returns ListBotsBotsManagedBotInstalledSkillsBotInstalledSkill.IsDirectInstall, and is useful for accessing the field via an interface.
 func (v *ListBotsBotsManagedBotInstalledSkillsBotInstalledSkill) GetIsDirectInstall() bool {
@@ -4331,6 +4343,7 @@ query BotInstalled ($slug: String!) {
 	bot(slug: $slug) {
 		installedSkills {
 			name
+			assetType
 			isDirectInstall
 		}
 	}
@@ -4801,6 +4814,7 @@ query ListBots {
 		}
 		installedSkills {
 			name
+			assetType
 			isDirectInstall
 		}
 	}

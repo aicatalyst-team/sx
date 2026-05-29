@@ -223,8 +223,8 @@ func TestSleuthVault_CreateBotRuntimeToken_QueryShape(t *testing.T) {
 						"description": "Reviews pull requests.",
 						"teams":       []any{},
 						"installedSkills": []any{
-							map[string]any{"name": "fix-pr", "isDirectInstall": true},
-							map[string]any{"name": "webapp-testing", "isDirectInstall": false},
+							map[string]any{"name": "fix-pr", "assetType": "SKILL", "isDirectInstall": true},
+							map[string]any{"name": "webapp-testing", "assetType": "SKILL", "isDirectInstall": false},
 						},
 					},
 				},
@@ -282,8 +282,8 @@ func TestSleuthVault_RevokeBotRuntimeTokens_QueryShape(t *testing.T) {
 						"description": "Reviews pull requests.",
 						"teams":       []any{},
 						"installedSkills": []any{
-							map[string]any{"name": "fix-pr", "isDirectInstall": true},
-							map[string]any{"name": "webapp-testing", "isDirectInstall": false},
+							map[string]any{"name": "fix-pr", "assetType": "SKILL", "isDirectInstall": true},
+							map[string]any{"name": "webapp-testing", "assetType": "SKILL", "isDirectInstall": false},
 						},
 					},
 				},
@@ -316,8 +316,9 @@ func TestSleuthVault_RevokeBotRuntimeTokens_QueryShape(t *testing.T) {
 
 func TestSleuthVault_ListBots_ProjectsSlug(t *testing.T) {
 	// Server returns installedSkills in non-alphabetical order with a
-	// duplicate to verify the Sleuth path dedupes and sorts (matching the
-	// file-based path's contract on mgmt.Bot.InstalledSkills).
+	// duplicate plus an installed agent asset to verify the Sleuth path
+	// filters to skills, dedupes, and sorts (matching the file-based path's
+	// contract on mgmt.Bot.InstalledSkills).
 	srv, _ := mockSleuthGraphQL(t, map[string]func(map[string]any) any{
 		"ListBots": func(vars map[string]any) any {
 			return map[string]any{
@@ -329,9 +330,10 @@ func TestSleuthVault_ListBots_ProjectsSlug(t *testing.T) {
 						"description": "Reviews pull requests.",
 						"teams":       []any{},
 						"installedSkills": []any{
-							map[string]any{"name": "webapp-testing", "isDirectInstall": false},
-							map[string]any{"name": "fix-pr", "isDirectInstall": true},
-							map[string]any{"name": "fix-pr", "isDirectInstall": true},
+							map[string]any{"name": "webapp-testing", "assetType": "SKILL", "isDirectInstall": false},
+							map[string]any{"name": "reviewer-agent", "assetType": "AGENT", "isDirectInstall": true},
+							map[string]any{"name": "fix-pr", "assetType": "SKILL", "isDirectInstall": true},
+							map[string]any{"name": "fix-pr", "assetType": "SKILL", "isDirectInstall": true},
 						},
 					},
 				},
