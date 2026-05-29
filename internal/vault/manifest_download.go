@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sleuth-io/sx/internal/asset"
 	"github.com/sleuth-io/sx/internal/lockfile"
 	"github.com/sleuth-io/sx/internal/manifest"
 	"github.com/sleuth-io/sx/internal/metadata"
@@ -83,6 +82,8 @@ func assetFromStorage(vaultRoot, name string) (*lockfile.Asset, bool, error) {
 	if len(versions) == 0 {
 		return nil, false, nil
 	}
+	// The install repair call site has no version in scope, so storage
+	// recovery picks the highest semver stored on disk.
 	latest := versions[len(versions)-1]
 	metaPath := filepath.Join(vaultRoot, "assets", name, latest, "metadata.toml")
 	metaBytes, err := os.ReadFile(metaPath)
@@ -93,7 +94,7 @@ func assetFromStorage(vaultRoot, name string) (*lockfile.Asset, bool, error) {
 	if err != nil {
 		return nil, false, fmt.Errorf("parse metadata for %q@%s: %w", name, latest, err)
 	}
-	if meta.Asset.Type == (asset.Type{}) {
+	if meta.Asset.Type.Key == "" {
 		return nil, false, fmt.Errorf("metadata for %q@%s has no asset type", name, latest)
 	}
 	deps := make([]lockfile.Dependency, 0, len(meta.Asset.Dependencies))
@@ -102,6 +103,9 @@ func assetFromStorage(vaultRoot, name string) (*lockfile.Asset, bool, error) {
 			deps = append(deps, lockfile.Dependency{Name: dep})
 		}
 	}
+	// Storage recovery is intentionally lossy: the original source kind and
+	// manifest-only fields are gone, so the recovered row points at the bytes
+	// currently present under assets/<name>/<version>.
 	return &lockfile.Asset{
 		Name:         name,
 		Version:      latest,

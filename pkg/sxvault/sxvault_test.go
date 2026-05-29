@@ -20,6 +20,7 @@ import (
 
 	"github.com/sleuth-io/sx/internal/git"
 	"github.com/sleuth-io/sx/internal/mgmt"
+	"github.com/sleuth-io/sx/internal/vault"
 )
 
 func TestGitPutAgentWritesSXVaultFormat(t *testing.T) {
@@ -117,6 +118,21 @@ func TestAgentMarkdownWrapsPromptStartingWithHorizontalRule(t *testing.T) {
 	})
 	if !strings.HasPrefix(got, "---\nname: reviewer\ndescription: \"Reviews PRs.\"\n---\n\n") {
 		t.Fatalf("agentMarkdown did not inject frontmatter:\n%s", got)
+	}
+}
+
+func TestAgentZipUsesAgentDescriptionFallbacks(t *testing.T) {
+	zipData, err := agentZip(AgentSpec{
+		AssetName:      "reviewer",
+		Version:        "1",
+		BotDescription: "Reviewer bot.",
+		Prompt:         "You are Reviewer.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !zipContains(t, zipData, "metadata.toml", `description = "Reviewer bot."`) {
+		t.Fatal("agent metadata did not fall back to bot description")
 	}
 }
 
@@ -289,8 +305,18 @@ func TestDeleteAssetRemovesGitVaultFilesAndManifest(t *testing.T) {
 	}
 }
 
+func TestDeleteAssetMissingGitVaultAssetReturnsNotFound(t *testing.T) {
+	_, client := newGitVaultClient(t)
+
+	err := client.DeleteAsset(context.Background(), "missing-agent")
+	if !errors.Is(err, vault.ErrAssetNotFound) {
+		t.Fatalf("DeleteAsset missing asset error = %v, want ErrAssetNotFound", err)
+	}
+}
+
 func TestDeleteAssetForSkillsNewRequestsPermanentDelete(t *testing.T) {
 	ctx := context.Background()
+	var ops []string
 	var sawDelete bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/graphql" {
@@ -305,26 +331,50 @@ func TestDeleteAssetForSkillsNewRequestsPermanentDelete(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if req.OperationName != "RemoveAssetInstallations" {
-			t.Fatalf("GraphQL operation = %q, want RemoveAssetInstallations", req.OperationName)
-		}
-		input, _ := req.Variables["input"].(map[string]any)
-		if got := input["assetName"]; got != "reviewer-agent" {
-			t.Fatalf("assetName = %v, want reviewer-agent", got)
-		}
-		if got := input["delete"]; got != true {
-			t.Fatalf("delete = %v, want true", got)
-		}
-		sawDelete = true
+		ops = append(ops, req.OperationName)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": map[string]any{
-				"removeAssetInstallations": map[string]any{
-					"success": true,
-					"errors":  []any{},
+		switch req.OperationName {
+		case "AssetGID":
+			if got := req.Variables["search"]; got != "Reviewer Agent" {
+				t.Fatalf("AssetGID search = %v, want Reviewer Agent", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"vault": map[string]any{
+						"assets": map[string]any{
+							"nodes": []any{
+								map[string]any{
+									"__typename": "Agent",
+									"id":         "agent-1",
+									"name":       "Reviewer Agent",
+									"slug":       "reviewer-agent",
+									"type":       "AGENT",
+								},
+							},
+						},
+					},
 				},
-			},
-		})
+			})
+		case "RemoveAssetInstallations":
+			input, _ := req.Variables["input"].(map[string]any)
+			if got := input["assetName"]; got != "reviewer-agent" {
+				t.Fatalf("assetName = %v, want reviewer-agent", got)
+			}
+			if got := input["delete"]; got != true {
+				t.Fatalf("delete = %v, want true", got)
+			}
+			sawDelete = true
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"removeAssetInstallations": map[string]any{
+						"success": true,
+						"errors":  []any{},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected GraphQL operation %q", req.OperationName)
+		}
 	}))
 	t.Cleanup(srv.Close)
 
@@ -332,11 +382,76 @@ func TestDeleteAssetForSkillsNewRequestsPermanentDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.DeleteAsset(ctx, "reviewer-agent"); err != nil {
+	if err := client.DeleteAsset(ctx, "Reviewer Agent"); err != nil {
 		t.Fatal(err)
+	}
+	if got := strings.Join(ops, ","); got != "AssetGID,RemoveAssetInstallations" {
+		t.Fatalf("GraphQL ops = %s, want AssetGID,RemoveAssetInstallations", got)
 	}
 	if !sawDelete {
 		t.Fatal("DeleteAsset did not call RemoveAssetInstallations")
+	}
+}
+
+func TestDeleteAssetForSkillsNewPropagatesMutationErrors(t *testing.T) {
+	ctx := context.Background()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/graphql" {
+			http.NotFound(w, r)
+			return
+		}
+		var req struct {
+			OperationName string         `json:"operationName"`
+			Variables     map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.OperationName {
+		case "AssetGID":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"vault": map[string]any{
+						"assets": map[string]any{
+							"nodes": []any{
+								map[string]any{
+									"__typename": "Agent",
+									"id":         "agent-1",
+									"name":       "Reviewer Agent",
+									"slug":       "reviewer-agent",
+									"type":       "AGENT",
+								},
+							},
+						},
+					},
+				},
+			})
+		case "RemoveAssetInstallations":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"removeAssetInstallations": map[string]any{
+						"success": false,
+						"errors": []any{
+							map[string]any{"field": "assetName", "messages": []string{"cannot delete"}},
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected GraphQL operation %q", req.OperationName)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := OpenSkillsNew(srv.URL, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.DeleteAsset(ctx, "Reviewer Agent")
+	if err == nil || !strings.Contains(err.Error(), "assetName: cannot delete") {
+		t.Fatalf("DeleteAsset error = %v, want mutation error", err)
 	}
 }
 

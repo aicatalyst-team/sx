@@ -503,6 +503,10 @@ func (c *Client) putAgentAsset(ctx context.Context, spec AgentSpec) (vault.AddAs
 				return vault.AddAssetResult{}, false, err
 			}
 			ast := &lockfile.Asset{Name: spec.AssetName, Version: spec.Version, Type: asset.TypeAgent}
+			// addAssetWithResult returns the server-persisted slug when the
+			// upload response or conflict payload carries one. Otherwise it
+			// falls back to spec.AssetName; later installation still resolves
+			// that through the vault's slug/name lookup.
 			upload, err := c.addAssetWithResult(ctx, ast, zipData)
 			return upload, false, err
 		}
@@ -818,7 +822,10 @@ func (c *Client) UninstallAssetFromBot(ctx context.Context, assetName, botName s
 //
 // Git and path vaults remove the asset from sx.toml and delete the asset
 // files from the current vault tip. Skills.new removes the asset and its
-// installations server-side. Git history may still contain older commits.
+// installations server-side. All install scopes referenced by the asset
+// are removed with it; there is no separate uninstall step. This is the
+// permanent-delete variant of the underlying vault removal API. Git history
+// may still contain older commits.
 func (c *Client) DeleteAsset(ctx context.Context, assetName string) error {
 	if c == nil || c.v == nil {
 		return errors.New("sxvault: nil client")
@@ -1037,7 +1044,7 @@ func agentZip(spec AgentSpec) ([]byte, error) {
 			Name:        spec.AssetName,
 			Version:     spec.Version,
 			Type:        asset.TypeAgent,
-			Description: strings.TrimSpace(spec.Description),
+			Description: agentDescription(spec),
 		},
 		Agent: &metadata.AgentConfig{PromptFile: "AGENT.md"},
 	}
@@ -1049,12 +1056,12 @@ func agentZip(spec AgentSpec) ([]byte, error) {
 }
 
 func agentDescription(spec AgentSpec) string {
-	for _, value := range []string{spec.Description, spec.BotDescription, spec.AssetName} {
+	for _, value := range []string{spec.Description, spec.BotDescription} {
 		if out := strings.TrimSpace(value); out != "" {
 			return out
 		}
 	}
-	return ""
+	return strings.TrimSpace(spec.AssetName)
 }
 
 func agentMarkdown(spec AgentSpec) string {

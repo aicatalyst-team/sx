@@ -855,8 +855,12 @@ func (g *GitVault) RemoveAsset(ctx context.Context, assetName, version string, d
 		return fmt.Errorf("failed to clone/update repository: %w", err)
 	}
 
-	if err := removeAssetFromManifest(g.repoPath, assetName, version); err != nil {
+	removed, err := removeAssetFromManifest(g.repoPath, assetName, version)
+	if err != nil {
 		return fmt.Errorf("failed to remove asset from manifest: %w", err)
+	}
+	if removed == 0 {
+		return ErrAssetNotFound
 	}
 
 	// If delete, also remove asset files from the vault

@@ -477,6 +477,13 @@ func (s *SleuthVault) RemoveAsset(ctx context.Context, assetName, version string
 	if version != "" {
 		return errors.New("version-specific removal is not supported for Sleuth vaults")
 	}
+	info, err := s.assetInfoByName(ctx, assetName)
+	if err != nil {
+		return err
+	}
+	if info.slug != "" {
+		assetName = info.slug
+	}
 
 	input := vaultgql.RemoveAssetInstallationsInput{AssetName: assetName}
 	// Only set Delete when the caller asked for permanent deletion, mirroring

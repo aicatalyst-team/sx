@@ -243,8 +243,12 @@ func (p *PathVault) InheritInstallations(ctx context.Context, asset *lockfile.As
 // RemoveAsset removes an asset from the manifest. If delete is true, the
 // asset's files are also removed from the vault's storage directory.
 func (p *PathVault) RemoveAsset(ctx context.Context, assetName, version string, delete bool) error {
-	if err := removeAssetFromManifest(p.repoPath, assetName, version); err != nil {
+	removed, err := removeAssetFromManifest(p.repoPath, assetName, version)
+	if err != nil {
 		return err
+	}
+	if removed == 0 {
+		return ErrAssetNotFound
 	}
 
 	if delete {

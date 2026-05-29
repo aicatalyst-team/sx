@@ -838,6 +838,27 @@ func TestPathVault_SetAssetInstallationRepairsOrphanedStoredAsset(t *testing.T) 
 	if len(got.Scopes) != 1 || got.Scopes[0].Kind != manifest.ScopeKindBot || got.Scopes[0].Bot != "testy" {
 		t.Fatalf("scopes = %+v, want bot testy", got.Scopes)
 	}
+
+	events, err := mgmt.QueryAuditEvents(dir, mgmt.AuditFilter{Target: "e2e-git-vault-skill-5524"})
+	if err != nil {
+		t.Fatalf("query audit: %v", err)
+	}
+	var recovered, installed bool
+	for _, event := range events {
+		switch event.Event {
+		case mgmt.EventAssetCreated:
+			recovered = event.TargetType == mgmt.TargetTypeAsset &&
+				event.Data["recovered_from_storage"] == true &&
+				event.Data["version"] == "1"
+		case mgmt.EventInstallSet:
+			installed = event.TargetType == mgmt.TargetTypeInstallation &&
+				event.Data["kind"] == string(manifest.ScopeKindBot) &&
+				event.Data["bot"] == "testy"
+		}
+	}
+	if !recovered || !installed {
+		t.Fatalf("audit events recovered=%v installed=%v events=%+v", recovered, installed, events)
+	}
 }
 
 // TestPathVault_SetAssetInstallation_RejectsOtherUser verifies the user-

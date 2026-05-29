@@ -788,7 +788,9 @@ func commonSetAssetInstallation(vaultRoot string, actor mgmt.Actor, assetName st
 		return fmt.Errorf("unknown installation kind: %q", target.Kind)
 	}
 
-	return withManifest(vaultRoot, actor, func(m *manifest.Manifest) (*mgmt.AuditEvent, error) {
+	var recoveredAuditData map[string]any
+	var installAuditData map[string]any
+	err := withManifest(vaultRoot, actor, func(m *manifest.Manifest) (*mgmt.AuditEvent, error) {
 		asset := m.FindAsset(assetName)
 		if asset == nil {
 			recovered, ok, err := assetFromStorage(vaultRoot, assetName)
@@ -797,6 +799,13 @@ func commonSetAssetInstallation(vaultRoot string, actor mgmt.Actor, assetName st
 			}
 			if !ok {
 				return nil, fmt.Errorf("asset %q not found", assetName)
+			}
+			recoveredAuditData = map[string]any{
+				"recovered_from_storage": true,
+				"version":                recovered.Version,
+				"type":                   recovered.Type.Key,
+				"source":                 "path",
+				"path":                   filepath.ToSlash(filepath.Join("assets", recovered.Name, recovered.Version)),
 			}
 			m.Assets = append(m.Assets, lockfileAssetToManifest(*recovered))
 			asset = m.FindAsset(assetName)
@@ -821,12 +830,34 @@ func commonSetAssetInstallation(vaultRoot string, actor mgmt.Actor, assetName st
 		} else if !scopeExistsOnAsset(asset.Scopes, s) {
 			asset.Scopes = append(asset.Scopes, s)
 		}
+		installAuditData = target.AuditData()
+		if recoveredAuditData != nil {
+			return &mgmt.AuditEvent{
+				Event:      mgmt.EventAssetCreated,
+				TargetType: mgmt.TargetTypeAsset,
+				Target:     assetName,
+				Data:       recoveredAuditData,
+			}, nil
+		}
 		return &mgmt.AuditEvent{
 			Event:      mgmt.EventInstallSet,
 			TargetType: mgmt.TargetTypeInstallation,
 			Target:     assetName,
-			Data:       target.AuditData(),
+			Data:       installAuditData,
 		}, nil
+	})
+	if err != nil {
+		return err
+	}
+	if recoveredAuditData == nil {
+		return nil
+	}
+	return mgmt.AppendAuditEvent(vaultRoot, mgmt.AuditEvent{
+		Actor:      actor.Email,
+		Event:      mgmt.EventInstallSet,
+		TargetType: mgmt.TargetTypeInstallation,
+		Target:     assetName,
+		Data:       installAuditData,
 	})
 }
 
