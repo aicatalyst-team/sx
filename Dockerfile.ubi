@@ -1,7 +1,10 @@
 # Multi-stage build for sx AI skills package manager
 
-# Build stage
-FROM registry.access.redhat.com/ubi9/go-toolset:1.22 AS builder
+# Build stage - using latest Go
+FROM golang:1.25-alpine AS builder
+
+# Install git and ca-certificates
+RUN apk add --no-cache git ca-certificates
 
 # Set working directory
 WORKDIR /workspace
