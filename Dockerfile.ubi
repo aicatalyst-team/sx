@@ -1,0 +1,81 @@
+# Multi-stage build for sx AI skills package manager
+
+# Build stage
+FROM registry.access.redhat.com/ubi9/go-toolset:1.22 AS builder
+
+# Set working directory
+WORKDIR /workspace
+
+# Copy go mod files first for dependency caching
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the binary with build info
+ARG VERSION=latest
+ARG COMMIT=container-build
+ARG DATE=""
+RUN if [ -z "$DATE" ]; then DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ"); fi && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags "-X github.com/sleuth-io/sx/internal/buildinfo.Version=${VERSION} -X github.com/sleuth-io/sx/internal/buildinfo.Commit=${COMMIT} -X github.com/sleuth-io/sx/internal/buildinfo.Date=${DATE}" \
+    -o sx ./cmd/sx
+
+# Runtime stage
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.4
+
+# Install git (required for git vault operations) and ca-certificates
+RUN microdnf update -y && \
+    microdnf install -y git ca-certificates && \
+    microdnf clean all && \
+    rm -rf /var/cache/yum
+
+# Create app user and directories
+RUN useradd -u 1001 -r -g 0 -s /sbin/nologin \
+    -c "sx user" sx && \
+    mkdir -p /opt/app-root /data/vault && \
+    chgrp -R 0 /opt/app-root /data/vault && \
+    chmod -R g=u /opt/app-root /data/vault
+
+# Copy binary from builder stage
+COPY --from=builder /workspace/sx /opt/app-root/bin/sx
+
+# Set executable permissions
+RUN chmod +x /opt/app-root/bin/sx && \
+    chown -R 1001:0 /opt/app-root && \
+    ln -s /opt/app-root/bin/sx /usr/local/bin/sx
+
+# Set environment variables for sx
+ENV PATH="/opt/app-root/bin:${PATH}" \
+    HOME="/opt/app-root" \
+    SX_VAULT_TYPE="path" \
+    SX_VAULT_PATH="/data/vault" \
+    SX_HTTP_PORT="8080" \
+    SX_LOG_LEVEL="info"
+
+# Set working directory and user
+WORKDIR /opt/app-root
+USER 1001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD sx --help > /dev/null || exit 1
+
+# Default command - run sx serve for HTTP API mode
+CMD ["sx", "serve", "--host", "0.0.0.0", "--port", "8080"]
+
+# Expose port for HTTP API
+EXPOSE 8080
+
+# Labels
+LABEL name="sx" \
+      summary="AI skills package manager" \
+      description="sx is your team's private npm for AI assets - skills, MCP configs, commands, and more." \
+      version="1.0" \
+      release="1" \
+      io.k8s.description="AI skills package manager for team collaboration" \
+      io.k8s.display-name="sx" \
+      io.openshift.tags="ai,skills,mcp,golang"
